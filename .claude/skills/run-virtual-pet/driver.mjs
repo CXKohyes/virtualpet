@@ -29,6 +29,7 @@ function parseArgs(argv) {
     widths: [360, 768, 1440],
     out: join(REPO_ROOT, '.artifacts', 'screenshots'),
     evalExpr: null,
+    prepareExpr: null,
     settleMs: 800,
     keepOpen: false,
   }
@@ -48,10 +49,11 @@ function parseArgs(argv) {
     else if (arg === '--widths') opts.widths = next().split(',').map((w) => Number(w.trim()))
     else if (arg === '--out') opts.out = resolve(REPO_ROOT, next())
     else if (arg === '--eval') opts.evalExpr = next()
+    else if (arg === '--prepare') opts.prepareExpr = next()
     else if (arg === '--settle') opts.settleMs = Number(next())
     else if (arg === '--keep-open') opts.keepOpen = true
     else if (arg === '--help' || arg === '-h') {
-      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--settle MS] [--keep-open]')
+      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--prepare JS] [--settle MS] [--keep-open]')
       process.exit(0)
     } else {
       throw new Error(`未知参数: ${arg}`)
@@ -334,6 +336,13 @@ async function main() {
         await cdp.send('Page.navigate', { url: opts.url })
         await waitForRender(cdp)
         await new Promise((r) => setTimeout(r, opts.settleMs))
+
+        // 只在第一个宽度跑一次：同一浏览器会话里 localStorage 是共享的，
+        // 后面两个宽度会直接看到 prepare 之后的状态（例如已领养的主界面）。
+        if (width === opts.widths[0] && opts.prepareExpr) {
+          await evaluate(cdp, opts.prepareExpr)
+          await new Promise((r) => setTimeout(r, opts.settleMs))
+        }
 
         const metrics = await evaluate(cdp, DEFAULT_PROBE)
         const shot = await cdp.send('Page.captureScreenshot', { format: 'png' })

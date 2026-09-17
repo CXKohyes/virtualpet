@@ -80,6 +80,7 @@ node .claude/skills/run-virtual-pet/driver.mjs
 | `--widths 360,1440` | 只测指定宽度 |
 | `--out <dir>` | 截图输出目录（默认 `.artifacts/screenshots`） |
 | `--eval "<js>"` | 在页面里执行 JS 并打印 JSON 结果（只跑第一个宽度，不截图） |
+| `--prepare "<js>"` | 截图前先在页面里跑一段 JS，只在第一个宽度执行一次。用来把界面驱动到要验收的状态，例如先完成领养再看主界面 |
 | `--url <url>` | 换一个页面（默认 `http://localhost:5173/`） |
 | `--settle <ms>` | 渲染完成后额外等待（默认 800ms，测动画时加长） |
 | `--keep-open` | 跑完不关浏览器，留着手动看 |
