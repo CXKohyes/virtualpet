@@ -352,6 +352,58 @@ class PetApiIntegrationTest {
         assertThat(wake.path("pet").path("exp").asInt()).isEqualTo(12);
     }
 
+    /**
+     * 唤醒必须真的把 {@code sleeping_since} 写回 null。
+     *
+     * <p>上面那条测试只看了响应体 —— 而响应体是用内存里的实体拼的，就算没落库也一样是
+     * {@code null}。这条换个角度：唤醒之后<b>重新读一次库</b>。曾经就是因为
+     * MyBatis-Plus 默认跳过 null 字段，唤醒写不进库，重新读回来还是"在睡觉"。</p>
+     */
+    @Test
+    @DisplayName("唤醒后重新读库：sleepingSince 确实被清掉了")
+    void wakeUpPersistsToDatabase() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+        act(session, "PLAY", "req-play", 200);
+        act(session, "SLEEP", "req-sleep", 200);
+        rewindTime(session, 2);
+        act(session, "WAKE", "req-wake", 200);
+
+        // 直接看数据库那一行
+        assertThat(petOf(session).getSleepingSince())
+                .as("MyBatis-Plus 默认跳过 null 字段，唤醒曾经写不进库")
+                .isNull();
+
+        // 再走一遍接口重新读，确认对外的表现也是清醒的
+        JsonNode reloaded = dataOf(getJson("/api/v1/pets/me", session.token(), 200));
+        assertThat(reloaded.path("sleepingSince").isNull())
+                .as("重新读回来还带着 sleepingSince 的话，界面会显示正常状态却给「唤醒」按钮")
+                .isTrue();
+        assertThat(reloaded.path("status").asText()).isNotEqualTo("SLEEPING");
+    }
+
+    @Test
+    @DisplayName("醒着的时候再唤醒 -> 409，不会重复发睡觉经验")
+    void wakingTwiceIsRejected() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+        act(session, "PLAY", "req-play", 200);
+        act(session, "SLEEP", "req-sleep", 200);
+        rewindTime(session, 2);
+        JsonNode first = dataOf(act(session, "WAKE", "req-wake-1", 200));
+
+        // 再等两小时。宠物醒着，这两小时不该产生任何经验；
+        // 要是第二次唤醒被放行，它会拿陈旧的 sleepingSince 又发一份睡觉经验
+        rewindTime(session, 2);
+        assertThat(act(session, "WAKE", "req-wake-2", 409).path("message").asText())
+                .isEqualTo("它并没有在睡觉");
+
+        assertThat(first.path("pet").path("exp").asInt()).as("玩耍 8 + 睡 2 小时 4").isEqualTo(12);
+        assertThat(dataOf(getJson("/api/v1/pets/me", session.token(), 200)).path("exp").asInt())
+                .as("经验只能来自真实经过的时间，反复唤醒不该刷出经验")
+                .isEqualTo(12);
+    }
+
     // ================================================================ 离线结算
 
     @Test

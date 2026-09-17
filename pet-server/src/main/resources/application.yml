@@ -41,3 +41,7 @@ logging:
   level:
     root: INFO
     com.virtualpet: DEBUG
+  pattern:
+    # 带上 requestId（由 RequestLoggingFilter 放进 MDC），
+    # 同一次请求的多行日志能串起来，对应 PRD 6.6
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{requestId:-—}] %logger{36} - %msg%n"

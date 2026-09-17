@@ -9,6 +9,8 @@
 - 时间一律是 UTC 的 ISO-8601 字符串（`2026-09-17T12:00:00Z`），前端负责转本地时区显示。
 - 请求和响应都是 JSON，UTF-8。
 - 需要鉴权的接口带 `Authorization: Bearer <token>`。
+- 每个响应都带 `X-Request-Id` 响应头。客户端可以传入自己的 `X-Request-Id`，服务端会清理非法字符、限制长度并回显；不传时由服务端生成。
+- 服务端为每个 HTTP 请求记录 `requestId`、HTTP 方法、路径、HTTP 状态、业务结果码和耗时（PRD 6.6）。日志只记录 request URI，不记录查询字符串、请求头或请求体。
 
 ### 1.1 统一响应结构
 
@@ -285,26 +287,54 @@ Authorization: Bearer <token>
 
 `messageKey` 是给前端选台词用的键，服务端不返回现成文案，由前端映射。
 
-### 2.8 开发用时间推进（仅 dev profile）
+### 2.8 开发用接口（仅 dev profile）
+
+这一节的接口**只在 `dev` profile 下存在**，其他 profile 下返回 404 `NOT_FOUND`。
+生产环境绝对不能激活该 profile。
+
+#### 2.8.1 推进时间
 
 ```http
 POST /api/v1/dev/advance-time
 Authorization: Bearer <token>
 
-{ "hours": 8 }
+{ "hours": 8, "settle": true }
 ```
 
 - `hours`：1–240。
-- **只在 `dev` profile 下存在**。其他 profile 下接口不存在，返回 404 `NOT_FOUND`。
+- `settle`：可选，默认 `true`。传 `false` 时只把结算游标往前挪、不结算，
+  把结算留给下一次读取 —— 回访提示只能由读取路径产生，推进接口顺手结算掉就再也看不到它了。
 - 实现方式是把宠物的结算游标往前挪，走的完全是真实结算路径，没有伪造时钟。
 - 返回结算后的宠物对象。
+
+#### 2.8.2 铺设状态
+
+```http
+POST /api/v1/dev/set-state
+Authorization: Bearer <token>
+
+{ "exp": 490, "satiety": 100 }
+```
+
+- 可传字段：`satiety` / `mood` / `hygiene` / `energy` / `health`（0–100）、
+  `exp`（0–10000）。不传的字段保持原值。
+- 铺设完立刻按真实规则重算状态、等级和进化，所以**进化、生病这些判定一条都没绕过**，
+  换掉的只是"属性/经验是从哪来的"。
+- 返回铺设后的宠物对象。
+
+为什么需要它：升到 8 级要 490 经验，而每次照护只有 6–8 点、还带 60 秒冷却
+（PRD 2.7 给正常节奏的估计是"第 16 天到 8 级"）；健康恢复也要求四项属性连续多小时
+高于 60。没有铺设工具，这两条验收路径就只能靠几十分钟的真实操作。
 
 启动 dev profile：
 
 ```powershell
 $env:JAVA_HOME = 'D:\JDK1'
-mvn -f pet-server/pom.xml spring-boot:run -Dspring-boot.run.profiles=dev
+mvn -f pet-server/pom.xml spring-boot:run -Dspring-boot.run.profiles=dev,local
 ```
+
+> 要读本机的数据库密码（`application-local.yml`）就得把 `local` 一起激活，
+> 因为 profile 配置文件只在自己那个 profile 生效。
 
 ---
 
@@ -335,14 +365,15 @@ P1 战报主题预留:      /topic/battles/{battleId}
 这些是 PRD / TECH_DESIGN 没有明确、或与文档有出入的地方，记录在此便于后续对齐。
 
 1. **生病是滞回状态，不是纯阈值。** PRD 2.3 说"健康低于 30 进入生病状态，恢复到 50 以上解除"，
-   而 TECH_DESIGN 6.3 写的是 `SICK（health < 30）`。本实现按 PRD：`pets.sick` 列是持久化的滞回标志，
+   而 TECH_DESIGN 6.3 原本写的是 `SICK（health < 30）`。本实现按 PRD：`pets.sick` 列是持久化的滞回标志，
    健康 <30 置位，≥50 才清除，30–49 之间保持原状。
-   **TECH_DESIGN 4.3 的字段表需要补上 `sick` 列，6.3 的状态优先级说明也需要同步。**
+   *（TECH_DESIGN 4.3 的字段表和 6.3 的判定说明已在验收批次同步。）*
 
-2. **不足一小时的离線时间不结算，游标只推进整小时。** TECH_DESIGN 6.1 的伪代码最后一行是
+2. **不足一小时的离線时间不结算，游标只推进整小时。** TECH_DESIGN 6.1 的伪代码最后一行原本是
    `lastSettledAt = now`。照做的话，玩家频繁刷新页面时每次都结算一次，而属性是整数、按小时衰减，
    不足一小时的衰减会被抹掉 —— 频繁刷新的玩家属性永远不会下降。
    本实现改为：不足一小时完全不结算、游标不动；只有封顶 12 小时时才把游标推到 `now` 以丢弃超出部分。
+   *（6.1 已同步。）*
 
 3. **物种的"衰减"修正同时作用于睡觉衰减表。** PRD 2.6 只写"清洁衰减 -25%"，没区分清醒/睡觉。
    本实现按"宠物属性本身的衰减速度"理解，猫睡觉时清洁同样 -25%。
@@ -362,11 +393,27 @@ P1 战报主题预留:      /topic/battles/{battleId}
 7. **`client_request_id` 是全表唯一索引。** 客户端必须为每次点击生成新的随机值；
    不同宠物之间也不能复用同一个值，否则会被当成重复请求。
 
-8. **没有实现请求级的 `requestId` 访问日志。** PRD 6.6 要求"每个请求记录 requestId、路径、耗时和结果码"，
-   本批次没有做，留到验收批次。
+8. **请求级访问日志已由 `RequestLoggingFilter` 实现。** 每个请求生成或透传 requestId，写入 MDC 和
+   `X-Request-Id` 响应头，并记录 method、path、status、业务 resultCode 和 durationMs。
+   `ApiResponseAdvice` 负责把 `OK`、`UNAUTHORIZED` 等业务码写入请求上下文；拿不到信封的请求退回 HTTP 状态码。
 
 9. **会话接口存在理论上的并发竞态。** 同一设备同时发起两次首次会话时，
    唯一索引会拦住重复插入并返回 500。单浏览器客户端不会触发，暂不处理。
+
+10. **注入的 `Clock` 精度是整秒（验收批次修的）。** `pets` 的时间列是秒精度的 `TIMESTAMP`，
+    而 MySQL 写入时会对小数秒**四舍五入**（不是截断）。原来时钟给的是纳秒精度，于是
+    "创建于 10:20:02.871"会存成 `10:20:03`，游标凭空向前跳了 0.129 秒；紧接着结算 8 小时，
+    实际经过时间是 7 小时 59.87 秒，取整成分钟就是 479 —— **整整少结算一个小时**。
+    实测以 0.5 为界：小数部分小于 0.5 的存进去是截断，大于等于 0.5 的会被进位。
+    修法是把时钟截断到整秒（`ClockConfig`），应用算出来的和数据库存下来的是同一个值。
+    游戏按小时结算，损失不到一秒的精度没有影响。
+
+11. **「唤醒」曾经写不进库（验收批次修的）。** MyBatis-Plus 默认的 `NOT_NULL` 更新策略会把
+    null 字段从 UPDATE 语句里剔掉，于是 `sleepingSince = null` 这一步静默失效：接口响应看着是对的
+    （用内存对象拼的），重新读回来却还是"在睡觉"。后果有两个 —— 界面显示状态正常、第四个按钮却是
+    「唤醒」；而且每次唤醒都会拿陈旧的 `sleepingSince` 重发一份睡觉经验，可以无限刷。
+    修法是给该字段单独标注 `@TableField(updateStrategy = FieldStrategy.ALWAYS)`。
+    原来的测试只断言了响应体，所以一直没发现；现在补了直接查库的回归测试。
 
 ---
 

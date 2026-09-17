@@ -5,6 +5,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
@@ -36,8 +37,18 @@ public class ApiResponseAdvice implements ResponseBodyAdvice<Object> {
                                   Class<? extends HttpMessageConverter<?>> selectedConverterType,
                                   ServerHttpRequest request, ServerHttpResponse response) {
         if (body instanceof ApiResponse<?> apiResponse) {
+            // 顺手把业务结果码交给访问日志（PRD 6.6）。这里是唯一一处
+            // 能同时看到"响应信封"和"当前请求"的地方，错过就得再解析一遍响应体。
+            rememberResultCode(apiResponse, request);
             return apiResponse.withServerTime(Instant.now(clock));
         }
         return body;
+    }
+
+    private void rememberResultCode(ApiResponse<?> apiResponse, ServerHttpRequest request) {
+        if (request instanceof ServletServerHttpRequest servletRequest) {
+            servletRequest.getServletRequest()
+                    .setAttribute(RequestLoggingFilter.CODE_ATTRIBUTE, apiResponse.code());
+        }
     }
 }

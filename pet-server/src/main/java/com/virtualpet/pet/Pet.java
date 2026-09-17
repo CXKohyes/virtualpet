@@ -1,6 +1,8 @@
 package com.virtualpet.pet;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
@@ -48,6 +50,20 @@ public class Pet {
 
     private Integer evolutionStage;
 
+    /**
+     * 入睡时刻，清醒时为 {@code null}。
+     *
+     * <p><b>必须显式声明 {@code updateStrategy = ALWAYS}。</b>MyBatis-Plus 默认的
+     * {@code NOT_NULL} 策略会把 null 字段从 UPDATE 语句里剔掉，于是"唤醒"把
+     * {@code sleepingSince} 置空这一步根本写不进库：接口响应看着是对的（用内存对象拼的），
+     * 下次读取却又变回"在睡觉"。后果有两个 ——
+     * 界面显示状态正常、第四个按钮却是「唤醒」；而且每次唤醒都会拿
+     * {@code sleepingSince} 到 {@code lastSettledAt} 的差值重发一份睡觉经验，可以无限刷。</p>
+     *
+     * <p>这是 {@code pets} 表里唯一的可空业务列，所以只在这一处开口子，
+     * 不用全局改 {@code update-strategy}（全局改会让其它字段在局部加载时被误清空）。</p>
+     */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Instant sleepingSince;
 
     private Instant lastSettledAt;

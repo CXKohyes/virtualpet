@@ -238,6 +238,7 @@ EvolutionStage: 0 | 1 | 2
 | hygiene | INT | NOT NULL, 0–100 | 清洁 |
 | energy | INT | NOT NULL, 0–100 | 精力 |
 | health | INT | NOT NULL, 0–100 | 健康 |
+| sick | TINYINT | NOT NULL, DEFAULT 0 | 生病滞回标志：健康 <30 置位，≥50 清除 |
 | status | VARCHAR(16) | NOT NULL | 当前状态枚举 |
 | level | INT | NOT NULL, 1–10 | 等级 |
 | exp | INT | NOT NULL, >=0 | 当前累计经验 |
@@ -404,7 +405,29 @@ Authorization: Bearer <token>
 
 仅在 `dev` profile 启用。用于验证离线衰减、生病、睡觉和进化。生产环境必须禁用。
 
-### 5.8 WebSocket 预埋
+### 5.8 开发状态铺设
+
+```http
+POST /api/v1/dev/set-state
+Authorization: Bearer <token>
+
+{
+  "exp": 490,
+  "satiety": 100
+}
+```
+
+同样只在 `dev` profile 启用。每个字段都可以不传，不传就保持原值。
+
+存在的理由和 5.7 一样，是"真实等待无法验收"：升到 8 级要 490 经验，而每次照护只有
+6–8 点、还带 60 秒冷却，`PRD.md` 2.7 给正常节奏的估计是"第 16 天到 8 级"；
+健康恢复也要求四项属性连续多小时高于 60。没有铺设工具，这两条验收路径就只能靠
+几十分钟的真实操作，等于没法回归。
+
+铺设完会立刻走一遍真实的后处理（重算状态、重算等级与进化），所以规则一条都没绕过 ——
+接口换掉的只是"属性/经验是从哪来的"。
+
+### 5.9 WebSocket 预埋
 
 ```text
 Endpoint: /ws
@@ -435,16 +458,25 @@ else:
 applyHealthChange(elapsed)
 updateStatus()
 checkEvolution()
-lastSettledAt = now
+// 只推进"整小时"那一段，不足一小时的余数留给下次，不要直接写 now
+lastSettledAt = cursor + settledHours
 ```
 
 实现要求：
 
 - `elapsed` 以分钟或秒为单位统一计算，最后按整数比例应用。
+- **结算只按整小时，游标只推进整小时。** 伪代码最后一行如果想要写成
+  `lastSettledAt = now`，会让频繁刷新页面的玩家每次都被结算一次，
+  而属性是整数、按小时衰减，不足一小时的衰减会被抹掉 ——
+  结果就是天天开着的玩家属性永远不会下降。正确做法是保留余数，
+  只有封顶 12 小时时才把游标直接推到 `now`（丢弃超出的部分）。
 - 单次结算最多 12 小时；超过部分直接丢弃，不累计。
 - 所有服务端读取和写入路径都必须先结算。
 - 不在每次结算中写逐小时日志，只保存最终状态。
 - 使用 `Clock` 注入，测试不能调用 `Instant.now()`。
+  注入的时钟**精度是整秒**（见 `ClockConfig`）：`pets` 的时间列是秒精度的
+  `TIMESTAMP`，而 MySQL 会把小数秒四舍五入，算得比存得精细就会凭空多出或少掉
+  最多半秒，正好卡在小时边界上时会让整次结算少算一小时。
 
 ### 6.2 操作处理
 
@@ -470,7 +502,7 @@ return result
 结算后的状态判定优先级：
 
 1. `SLEEPING`
-2. `SICK`（health < 30）
+2. `SICK`（见下方滞回说明，不是单纯比 health < 30）
 3. `HUNGRY`（satiety < 25）
 4. `TIRED`（energy < 20）
 5. `DIRTY`（hygiene < 25）
@@ -478,6 +510,19 @@ return result
 7. `NORMAL`
 
 多项异常同时存在时显示最高优先级状态，但前端状态条仍展示全部异常属性。
+
+**生病是滞回状态，不是纯阈值。** `PRD.md` 2.3 写的是"健康低于 30 进入生病状态，
+恢复到 50 以上解除"，所以判定要带上"之前是不是已经病了"这个输入：
+
+| 之前 | 健康 | 结果 |
+| --- | --- | --- |
+| 健康 | < 30 | 进入生病 |
+| 健康 | ≥ 30 | 正常 |
+| 生病 | < 50 | 保持生病 |
+| 生病 | ≥ 50 | 解除生病 |
+
+也就是说 30–49 这一段是"维持原状"的缓冲区。`pets.sick` 列持久化这个标志，
+光看 `health` 是推不出来的。
 
 ### 6.4 等级和进化
 
@@ -507,6 +552,23 @@ token_hash = SHA-256(token)
 - 后续请求通过 `Authorization: Bearer <token>` 传递。
 - 服务端比对哈希，不存储明文。
 - 连续无效令牌返回 401，不泄露设备是否存在。
+
+### 6.7 请求访问日志
+
+对应 `PRD.md` 6.6。每个请求记录 **requestId、路径、耗时和结果码**：
+
+```text
+18:25:03.421 INFO  [7f3a1c9e-...] RequestLoggingFilter - POST /api/v1/pets/me/actions -> 200 OK (37ms)
+```
+
+- requestId 优先取调用方传来的 `X-Request-Id`（会做字符清洗和截断），
+  没有就自己生成，两种情况都回写到响应头，方便报障时对齐。
+- requestId 同时放进 MDC，同一次请求里打的业务日志都会带上它，
+  排查时能把一条链串起来。
+- 结果码取响应信封里的业务码（`OK` / `PET_NOT_FOUND` …）；
+  没有信封的请求（静态资源、actuator）退回 `HTTP_<状态码>`。
+- 封装在 `RequestLoggingFilter` 里，顺序设为最高，这样鉴权失败的 401
+  也会被计时和记录。
 
 ## 7. 前端架构
 

@@ -63,6 +63,7 @@ function parseArgs(argv) {
     keepOpen: false,
     chromeArgs: [],
     presses: [],
+    initExpr: null,
   }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -98,8 +99,10 @@ function parseArgs(argv) {
     // 可重复。真实按键事件，用来验证键盘可达性 ——
     // 页面里写 el.focus() 不会命中 :focus-visible，只有真按键才算数。
     else if (arg === '--press') opts.presses.push(next())
+    // 页面脚本开跑之前执行。要在应用启动前铺 localStorage（例如恢复存档）就用它
+    else if (arg === '--init-js') opts.initExpr = next()
     else if (arg === '--help' || arg === '-h') {
-      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--prepare JS] [--settle MS] [--chrome-arg FLAG] [--press KEY] [--keep-open]')
+      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--prepare JS] [--init-js JS] [--settle MS] [--chrome-arg FLAG] [--press KEY] [--keep-open]')
       process.exit(0)
     } else {
       throw new Error(`未知参数: ${arg}`)
@@ -345,6 +348,13 @@ async function main() {
     cdp = await Cdp.connect(page.webSocketDebuggerUrl)
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
+
+    // 每个新文档加载前都会跑一遍。用来在应用启动**之前**铺好 localStorage ——
+    // 用 --prepare 做不到这件事：那时候页面已经加载完、应用早就建好会话了。
+    // 验证"刷新页面 / 换浏览器之后存档还在"就靠它。
+    if (opts.initExpr) {
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: opts.initExpr })
+    }
 
     // 收集页面报错：Vue 警告、未捕获异常、console.error 都会进这里
     cdp.on('Runtime.consoleAPICalled', (p) => {

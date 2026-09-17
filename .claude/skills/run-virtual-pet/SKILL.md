@@ -85,9 +85,25 @@ node .claude/skills/run-virtual-pet/driver.mjs
 | `--settle <ms>` | 渲染完成后额外等待（默认 800ms，测动画时加长） |
 | `--chrome-arg <flag>` | 追加一个浏览器开关，可重复。用来模拟只能靠开关造出来的环境，例如 `--chrome-arg --force-prefers-reduced-motion` |
 | `--press <键名>` | 发一次**真实按键**，可重复。支持 `Tab` `Enter` `Escape` `Space` 和四个方向键 |
+| `--init-js <js>` | 在**页面脚本开跑之前**执行，用来铺 localStorage |
 | `--keep-open` | 跑完不关浏览器，留着手动看 |
 
-`--prepare` 和 `--press` 在 `--eval` 模式下同样生效，顺序是 prepare → press → eval。
+`--prepare` 和 `--press` 在 `--eval` 模式下同样生效，顺序是 init-js → 页面加载 → prepare → press → eval。
+
+#### 恢复存档（`--init-js`）
+
+`--prepare` 是在页面加载**之后**跑的，那时候应用早就建好会话了，所以想验证
+「刷新页面 / 换浏览器之后存档还在」只能用 `--init-js`：
+
+```powershell
+node .claude/skills/run-virtual-pet/driver.mjs --widths 1440 `
+  --init-js "localStorage.setItem('virtual-pet.device-id', '<上次那个 deviceId>');" `
+  --eval "(() => ({ 名字: document.querySelector('.home-title')?.textContent }))()"
+# => { "名字": "存档测试" }
+```
+
+先跑一次领养把 `localStorage.getItem('virtual-pet.device-id')` 记下来，重启后端，
+再用上面这条带上同一个 deviceId —— 页面会像老玩家回访一样把宠物读回来。
 
 `--eval` 的表达式是**原样**丢给 `Runtime.evaluate` 的，所以多行脚本要自己包一层 IIFE：
 
