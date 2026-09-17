@@ -341,6 +341,63 @@ async function acceptConfig() {
   check('配置带进化条件', Array.isArray(config.evolution) && config.evolution.length > 0)
 }
 
+/** P1：异步对战（PRD 2.11）。 */
+async function acceptBattle() {
+  // 挑战方
+  await newPlayer()
+  await ok('POST', '/api/v1/pets', { species: 'DRAGON', name: '小蓝' })
+  const myCode = (await ok('GET', '/api/v1/players/me/friend-code')).friendCode
+  const challengerToken = token
+  check('好友码是 8 位且不含形近字符', /^[A-HJ-NP-Z2-9]{8}$/.test(myCode))
+  checkEqual('好友码幂等', (await ok('GET', '/api/v1/players/me/friend-code')).friendCode, myCode)
+
+  // 自己打自己必须在**当前还是这个玩家**的时候验，换了令牌就成正常挑战了
+  checkEqual('不能挑战自己', await fails('POST', '/api/v1/battles', { friendCode: myCode }), 'SELF_CHALLENGE')
+  checkEqual('好友码不存在', await fails('POST', '/api/v1/battles', { friendCode: 'ZZZZZZZZ' }), 'FRIEND_CODE_NOT_FOUND')
+
+  // 被挑战方
+  await newPlayer()
+  await ok('POST', '/api/v1/pets', { species: 'CAT', name: '咪咪' })
+  const defenderCode = (await ok('GET', '/api/v1/players/me/friend-code')).friendCode
+
+  // 回到挑战方发起
+  token = challengerToken
+  const battle = await ok('POST', '/api/v1/battles', { friendCode: defenderCode })
+  checkEqual('对战立刻完成', battle.status, 'FINISHED')
+  checkEqual('挑战方视角正确', battle.viewer, 'CHALLENGER')
+  check('战报有逐回合记录', Array.isArray(battle.timeline) && battle.timeline.length > 0)
+  check('战报带固定种子', typeof battle.seed === 'number')
+  check('胜负已判定', battle.winner !== undefined)
+  checkEqual('回合数对得上', battle.rounds, battle.timeline.length)
+  check(
+    '每个事件都带双方血量',
+    battle.timeline.every((round) =>
+      round.events.every((e) => typeof e.challengerHpAfter === 'number' && typeof e.defenderHpAfter === 'number')),
+  )
+  check(
+    '血量不会变成负数',
+    battle.timeline.every((round) =>
+      round.events.every((e) => e.challengerHpAfter >= 0 && e.defenderHpAfter >= 0)),
+  )
+
+  // 战斗不该影响养成
+  const petAfter = await ok('GET', '/api/v1/pets/me')
+  checkEqual('对战不改变等级', petAfter.level, 1)
+  checkEqual('对战不给经验', petAfter.exp, 0)
+
+  // 局外人查不到：记录里有双方宠物的完整状态，只有参战双方能看
+  await newPlayer()
+  checkEqual('第三个人看不到这场对战', await fails('GET', `/api/v1/battles/${battle.id}`), 'BATTLE_NOT_FOUND')
+
+  token = challengerToken
+  const list = await ok('GET', '/api/v1/battles')
+  check('最近对战里有这一场', list.some((item) => item.id === battle.id))
+  check('列表项带对手名字', typeof list[0]?.opponentName === 'string')
+
+  const topic = await ok('GET', '/api/v1/battles/topic')
+  checkEqual('通知主题前缀', topic.prefix, '/topic/battles/')
+}
+
 // ---------------------------------------------------------------- 主流程
 
 async function main() {
@@ -368,6 +425,7 @@ async function main() {
     ['7. 存档重置', acceptReset],
     ['8. 错误提示', acceptErrors],
     ['8. 游戏配置', acceptConfig],
+    ['P1. 异步对战', acceptBattle],
   ]
 
   for (const [title, run] of scenarios) {

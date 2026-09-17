@@ -19,6 +19,14 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // WebSocket 也要代理，否则前端连的是 Vite 自己，握手直接失败。
+      // `ws: true` 是必须的：不开的话 Vite 会按普通 HTTP 请求转发，
+      // 升级请求到不了后端 —— 表现出来就是通知一直是"未连接"。
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
   test: {

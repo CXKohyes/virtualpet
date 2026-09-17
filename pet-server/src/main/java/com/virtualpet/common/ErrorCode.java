@@ -43,6 +43,18 @@ public enum ErrorCode {
     /** 并发冲突且重试用尽。 */
     CONFLICT(HttpStatus.CONFLICT, "操作太频繁，请重试"),
 
+    /** 好友码不存在（P1 对战）。不区分"格式对但没人"和"根本没这个码"，避免被枚举。 */
+    FRIEND_CODE_NOT_FOUND(HttpStatus.NOT_FOUND, "没有找到这个好友码"),
+
+    /** 拿自己的好友码挑战自己。 */
+    SELF_CHALLENGE(HttpStatus.CONFLICT, "不能挑战自己"),
+
+    /** 对方还没有宠物，没得打。 */
+    OPPONENT_NO_PET(HttpStatus.CONFLICT, "对方还没有领养宠物"),
+
+    /** 对战记录不存在，或者与当前玩家无关。 */
+    BATTLE_NOT_FOUND(HttpStatus.NOT_FOUND, "没有这场对战的记录"),
+
     /** 未预期的服务端错误。 */
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "服务器开小差了，请稍后再试");
 

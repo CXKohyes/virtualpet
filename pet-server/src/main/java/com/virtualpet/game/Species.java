@@ -10,23 +10,56 @@ package com.virtualpet.game;
  */
 public enum Species {
 
-    /** 猫：灵巧、爱玩。玩耍心情收益 +25%，清洁衰减 -25%。 */
-    CAT(new Modifier(1.25, 1.00, 1.00, 0.75, 1.00, 0)),
+    /** 猫：灵巧、爱玩。玩耍心情收益 +25%，清洁衰减 -25%。对战偏速度。 */
+    CAT(new Modifier(1.25, 1.00, 1.00, 0.75, 1.00, 0), new BattleTendency(0, 1, 1, 6, 0)),
 
-    /** 狗：均衡、亲人。所有正向照护收益 +10%，健康恢复额外 +1/小时。 */
-    DOG(new Modifier(1.00, 1.10, 1.00, 1.00, 1.00, 1)),
+    /** 狗：均衡、亲人。所有正向照护收益 +10%，健康恢复额外 +1/小时。对战均衡且有恢复。 */
+    DOG(new Modifier(1.00, 1.10, 1.00, 1.00, 1.00, 1), new BattleTendency(4, 1, 2, 1, 4)),
 
-    /** 龙：贪吃、强壮。喂食饱食收益 +15%，精力衰减 -25%。 */
-    DRAGON(new Modifier(1.00, 1.00, 1.15, 1.00, 0.75, 0));
+    /** 龙：贪吃、强壮。喂食饱食收益 +15%，精力衰减 -25%。对战偏攻击。 */
+    DRAGON(new Modifier(1.00, 1.00, 1.15, 1.00, 0.75, 0), new BattleTendency(6, 5, 0, 0, 0));
 
     private final Modifier modifier;
+    private final BattleTendency battle;
 
-    Species(Modifier modifier) {
+    Species(Modifier modifier, BattleTendency battle) {
         this.modifier = modifier;
+        this.battle = battle;
     }
 
     public Modifier modifier() {
         return modifier;
+    }
+
+    /**
+     * 对战倾向（PRD 2.11「物种特性影响速度、攻击、防御或恢复倾向」）。
+     *
+     * <p>和 {@link Modifier} 分开而不是塞进同一个 record：那个是<b>照护</b>修正表，
+     * 这个是<b>战斗</b>修正表，两者的消费方（结算服务 / 战斗模拟器）毫无关系，
+     * 混在一起只会让每次读代码都要先分辨哪个字段属于哪一边。</p>
+     */
+    public BattleTendency battle() {
+        return battle;
+    }
+
+    /**
+     * 战斗中的物种倾向。
+     *
+     * <p>三个物种各占一个位置，没有谁全面更强：猫靠先手多打一轮，狗靠回血拖持久战，
+     * 龙靠单次伤害高。具体数值由 {@link BattleRules} 换算成实际属性。</p>
+     *
+     * @param hpBonus      生命加成
+     * @param attackBonus  攻击加成
+     * @param defenseBonus 防御加成
+     * @param speedBonus   速度加成（决定每回合谁先动手，以及额外出手的概率）
+     * @param regenPercent 每回合恢复的生命占最大生命的百分比，狗的特色
+     */
+    public record BattleTendency(
+            int hpBonus,
+            int attackBonus,
+            int defenseBonus,
+            int speedBonus,
+            int regenPercent) {
     }
 
     /**

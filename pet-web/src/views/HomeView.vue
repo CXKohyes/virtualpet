@@ -158,6 +158,9 @@ function dismissFlash(): void {
         </div>
         <div class="home-header-right">
           <span class="home-clock">服务器时间 {{ serverTimeText }}</span>
+          <PixelButton hint="找朋友的宠物打一场" @press="router.push({ name: 'battle' })">
+            对战
+          </PixelButton>
           <PixelButton hint="打开设置" @press="uiStore.openSettings()">设置</PixelButton>
         </div>
       </header>

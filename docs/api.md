@@ -52,6 +52,10 @@
 | 409 | `ACTION_NO_EFFECT` | 当前操作无效果（`message` 给出具体原因） |
 | 409 | `CONFLICT` | 乐观锁冲突且重试用尽 |
 | 429 | `ACTION_COOLDOWN` | 操作冷却中 |
+| 404 | `FRIEND_CODE_NOT_FOUND` | 好友码不存在 |
+| 409 | `SELF_CHALLENGE` | 拿自己的好友码挑战自己 |
+| 409 | `OPPONENT_NO_PET` | 对方还没有领养宠物 |
+| 404 | `BATTLE_NOT_FOUND` | 对战记录不存在，或与当前玩家无关 |
 | 500 | `INTERNAL_ERROR` | 未预期的服务端错误 |
 
 鉴权先于路由：`/api/v1/**` 下即使是**不存在**的路径，没有令牌也会先返回 401。
@@ -336,6 +340,104 @@ mvn -f pet-server/pom.xml spring-boot:run -Dspring-boot.run.profiles=dev,local
 > 要读本机的数据库密码（`application-local.yml`）就得把 `local` 一起激活，
 > 因为 profile 配置文件只在自己那个 profile 生效。
 
+### 2.9 好友码（P1 对战）
+
+```http
+GET /api/v1/players/me/friend-code
+Authorization: Bearer <token>
+```
+
+```json
+{ "friendCode": "K7M2PQXF", "length": 8 }
+```
+
+- 8 位，字母表剔掉了 `0/O` 和 `1/I/L` —— 这是要念给朋友听或者手输的东西。
+- **懒生成**：第一次调用才发一个，之后幂等。绝大多数匿名玩家不会去对战，
+  没必要一建号就占一个唯一码。
+- 服务端用 `SecureRandom` 生成：好友码是"知道就能挑战"的凭据，可猜的码等于谁都能打别人。
+
+### 2.10 发起挑战（P1 对战）
+
+```http
+POST /api/v1/battles
+Authorization: Bearer <token>
+
+{ "friendCode": "K7M2PQXF" }
+```
+
+大小写不敏感，前后空格会被去掉。服务端**同步**跑完战斗并返回完整战报。
+
+- 挑战方要有宠物，否则 404 `PET_NOT_FOUND`；对方要有宠物，否则 409 `OPPONENT_NO_PET`。
+- 不能挑战自己：409 `SELF_CHALLENGE`。
+- **双方宠物状态以快照冻结**，战斗过程只读快照。被挑战方可以全程离线 ——
+  这正是"异步对战"的含义。打完之后的养成、进化、生病都不会改写已出的战报。
+- 战斗**不改变任何养成状态**：不打折经验、不掉属性，纯切磋。
+
+响应 `data`：
+
+```json
+{
+  "id": 1,
+  "status": "FINISHED",
+  "viewer": "CHALLENGER",
+  "challenger": { "petId": 1, "name": "小蓝", "species": "DRAGON", "level": 5,
+                  "evolutionStage": 1, "maxHp": 101, "attack": 26, "defense": 11, "speed": 10 },
+  "defender":   { "petId": 2, "name": "咪咪", "species": "CAT", "level": 5,
+                  "evolutionStage": 1, "maxHp": 95, "attack": 23, "defense": 12, "speed": 16 },
+  "winner": "CHALLENGER",
+  "outcome": "KO",
+  "rounds": 6,
+  "seed": 123456789,
+  "timeline": [
+    { "round": 1, "events": [
+      { "actor": "CHALLENGER", "type": "ATTACK", "value": 18, "crit": false,
+        "challengerHpAfter": 101, "defenderHpAfter": 77 },
+      { "actor": "DEFENDER", "type": "HEAL", "value": 3, "crit": false,
+        "challengerHpAfter": 101, "defenderHpAfter": 80 }
+    ] }
+  ],
+  "createdAt": "2026-09-17T12:00:00Z",
+  "finishedAt": "2026-09-17T12:00:00Z"
+}
+```
+
+- `viewer` 告诉前端"你是谁"，界面据此把己方标出来。**同一场对战双方查到的内容
+  除了这一个字段之外完全相同。**
+- `outcome`：`KO`（打倒）/ `TIMEOUT`（打满回合按剩余生命判定）/ `DRAW`。
+- 每个事件里的两个血量都是**这个动作做完之后**的值，前端照着画血条就行，
+  不需要自己按顺序累加 —— 累加就等于把战斗规则抄进了界面。
+- `winner` 为 `null` 表示平局。
+
+### 2.11 查询对战
+
+```http
+GET /api/v1/battles?limit=20        # 我的最近对战，新的在前
+GET /api/v1/battles/{battleId}      # 某一场的完整战报
+GET /api/v1/battles/topic           # 战报通知的订阅主题
+```
+
+- `limit` 可选，服务端钳制在 1–50。
+- **只有参战双方能查单场战报**，其他人拿到 battleId 也是 404 ——
+  记录里有双方宠物的完整状态。列表天然只返回自己的。
+- 列表项比单场少一个 `timeline`（几十条记录各带一份完整战报会让响应大一个数量级），
+  多一个 `opponentName` / `opponentSpecies`，是**相对 viewer 的对手**。
+
+### 2.12 战报就绪通知（WebSocket）
+
+战斗打完时推一条到 `/topic/battles/{battleId}`：
+
+```json
+{ "type": "BATTLE_FINISHED", "battleId": 1, "status": "FINISHED",
+  "serverTime": "2026-09-17T12:00:00Z" }
+```
+
+**报文里只有对战 ID 和状态，没有宠物名字、胜负或回合数。** 原因是被挑战方
+事先不知道 battleId，只能订阅通配的 `/topic/battles/*`，那是个真广播 ——
+往里塞名字就等于把别人的宠物名广播给所有连上来的客户端。想知道这一场是不是
+自己的，拿着 ID 去查 `/battles` 列表，那条路径有令牌校验。
+
+**通知只是提示，不是数据。** 战报本体一律走 REST 查。
+
 ---
 
 ## 3. WebSocket（预埋）
@@ -414,6 +516,30 @@ P1 战报主题预留:      /topic/battles/{battleId}
     「唤醒」；而且每次唤醒都会拿陈旧的 `sleepingSince` 重发一份睡觉经验，可以无限刷。
     修法是给该字段单独标注 `@TableField(updateStrategy = FieldStrategy.ALWAYS)`。
     原来的测试只断言了响应体，所以一直没发现；现在补了直接查库的回归测试。
+
+12. **对战是「同步算完 + 异步通知」，没有后台任务。** `status` 列落库的永远是 `FINISHED`。
+    确定性模拟本身只要微秒级，做成后台任务只会凭空多出一个中间态和一堆竞态。
+    `PENDING` 保留在枚举里，是为了将来真要做后台执行时不用改表结构和接口契约。
+    "异步"指的是**被挑战方不需要在线**（打的是快照），不是"战斗在后台跑"。
+
+13. **`battles` 表的字段比 TECH_DESIGN 4.5 的预留多了两个玩家外键。**
+    那份字段表是批次 2 的草稿，只有 `challenger_pet_id` / `defender_pet_id`。
+    但"我的最近对战"要按玩家查，只有宠物 ID 就得先反查宠物再反查玩家；
+    而且对战记录里存了双方宠物的完整快照，用玩家 ID 做归属判断更直接。
+    所以加了 `challenger_player_id` / `defender_player_id` 各带一个索引。
+
+14. **物种对战倾向的三个数值是实测调出来的，不是拍脑袋定的。** 中间走了不少弯路，
+    记下来免得下次重蹈：
+    - 速度原本只决定先手，而先手大约只值半次攻击，结果**猫对谁都是 0% 胜率**。
+      给速度一个能换算成伤害的出口（速度优势 → 额外出手概率）之后才站得住。
+    - 物种加成原本是固定值，而基础属性随等级线性增长，于是同一个 +5 攻击在 1 级占
+      基础的 50%、10 级只占 14% —— 龙在 1 级碾压（82%）、10 级被狗压着打（20%）。
+      改成跟着等级缩放之后才各段一致。
+    - 每回合回血原本也是固定值，同样的病：固定 3 点对 1 级的 56 点血是 5%，
+      对 10 级的 140 点只剩 2%。改成按最大生命的百分比。
+    - **中期（5 级）目前三个物种两两都在 41–59%**，这是主要平衡目标；
+      1 级和 10 级两端还有偏差（例如 10 级狗对龙偏高），没有继续磨。
+      这几条都钉在 `BattleSimulatorTest` 里，改数值会立刻被拦下来。
 
 ---
 

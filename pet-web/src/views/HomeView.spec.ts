@@ -125,6 +125,7 @@ async function mountView(
     routes: [
       { path: '/', name: 'home', component: HomeView },
       { path: '/onboarding', name: 'onboarding', component: { template: '<p>onboarding</p>' } },
+      { path: '/battle', name: 'battle', component: { template: '<p>battle</p>' } },
     ],
   })
   await router.push('/')
@@ -148,6 +149,17 @@ async function mountView(
 /** 操作区里的四个按钮。 */
 function actionButtons(wrapper: ReturnType<typeof mount>) {
   return wrapper.findAll('.action-dock button')
+}
+
+/** 页头里按文字找按钮。按钮会随功能增加而变多，按下标取迟早会点错。 */
+function headerButton(wrapper: ReturnType<typeof mount>, label: string) {
+  const button = wrapper
+    .findAll('.home-header-right button')
+    .find((candidate) => candidate.text().includes(label))
+  if (!button) {
+    throw new Error(`页头里没有「${label}」按钮`)
+  }
+  return button
 }
 
 describe('HomeView', () => {
@@ -314,10 +326,22 @@ describe('HomeView', () => {
     const { wrapper } = await mountView()
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    await wrapper.find('.home-header-right button').trigger('click')
+    // 按文字找，不按位置：页头的按钮会随功能增加而变多，
+    // 早先写死的 `button` 选择器在加了对战入口之后就点错了目标
+    await headerButton(wrapper, '设置').trigger('click')
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('重新领养')
+  })
+
+  it('页头有对战入口，点了会跳到对战页', async () => {
+    fetchPetMock.mockResolvedValue(makePet())
+    const { wrapper, router } = await mountView()
+
+    await headerButton(wrapper, '对战').trigger('click')
+
+    // router.push 是异步的，触发点击之后要等它落地（isReady 此刻早就 resolve 了）
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('battle'))
   })
 
   it('操作按钮的悬停提示来自游戏配置', async () => {

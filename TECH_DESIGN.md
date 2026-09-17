@@ -266,9 +266,30 @@ EvolutionStage: 0 | 1 | 2
 | result_json | TEXT | NOT NULL | 操作结果摘要 |
 | created_at | TIMESTAMP | NOT NULL | UTC 创建时间 |
 
-### 4.5 battles（P1）
+### 4.5 battles（P1，批次 6 已实现）
 
-预留字段：`id`、`challenger_pet_id`、`defender_pet_id`、`challenger_snapshot`、`defender_snapshot`、`seed`、`result_json`、`status`、`created_at`、`finished_at`。MVP 不创建该表。
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT | PK, AUTO_INCREMENT | 对战 ID |
+| challenger_player_id | BIGINT | NOT NULL, FK | 发起方玩家 |
+| defender_player_id | BIGINT | NOT NULL, FK | 被挑战方玩家 |
+| challenger_pet_id | BIGINT | NOT NULL | 发起方宠物 ID |
+| defender_pet_id | BIGINT | NOT NULL | 被挑战方宠物 ID |
+| challenger_snapshot | TEXT | NOT NULL | 发起方快照 JSON，**冻结** |
+| defender_snapshot | TEXT | NOT NULL | 被挑战方快照 JSON，**冻结** |
+| seed | BIGINT | NOT NULL | 固定随机种子 |
+| status | VARCHAR(16) | NOT NULL | PENDING / FINISHED |
+| result_json | TEXT | NULL | 战报 JSON |
+| created_at | TIMESTAMP | NOT NULL | UTC 发起时间 |
+| finished_at | TIMESTAMP | NULL | UTC 结束时间 |
+
+索引：`(challenger_player_id, id)`、`(defender_player_id, id)`。
+
+比最初的预留多了两个玩家外键：「我的最近对战」要按玩家查，只有宠物 ID 就得先反查宠物
+再反查玩家；而且记录里有双方宠物的完整快照，用玩家 ID 做归属判断更直接。
+
+`seed` 单独存一列：复现一场战斗需要的输入要么在快照里、要么在这一列里，
+不能散在别处。**同一对快照 + 同一个种子必须产出逐字节相同的战报。**
 
 ## 5. API 设计
 
@@ -553,7 +574,38 @@ token_hash = SHA-256(token)
 - 服务端比对哈希，不存储明文。
 - 连续无效令牌返回 401，不泄露设备是否存在。
 
-### 6.7 请求访问日志
+### 6.7 确定性自动战斗（P1）
+
+战斗在 `BattleSimulator` 里，是个**纯函数**：两份快照加一个种子进去，一份战报出来。
+不读数据库、不看时钟、不碰 Spring。
+
+随机源用 `java.util.Random`（`new Random(seed)`）。它虽然是伪随机，但算法在 Javadoc 里
+被写死成线性同余，**跨 JVM、跨平台、跨版本都逐位一致** —— 这正是这里需要它、
+而不是需要"更好的随机"的原因。`ThreadLocalRandom` 和 `SecureRandom` 反而做不到。
+
+**随机数的取用顺序是协议的一部分。** 目前每个回合里依次取：暴击判定 → 伤害浮动 →
+（触发追加攻击时）暴击判定 → 伤害浮动。改动顺序会让所有历史战报的复现失效。
+
+战斗属性从宠物现有状态推出来，不另存一套：
+最大生命与攻防由**等级 + 进化阶段**决定，**物种倾向**在其上叠加，开场生命再按
+**当前健康**折算（健康 100 满血上场，健康 20 就只有两成血）。这是战斗和养成之间
+唯一的接口，也让"照顾好宠物"这件事真的影响战斗。
+
+三个物种各占一个位置，没有谁全面更强：
+
+| 物种 | 倾向 | 战斗里的表现 |
+| --- | --- | --- |
+| 猫 | 速度 +6 | 出手最快，靠速度差换追加攻击 |
+| 狗 | 生命 +4 / 防御 +2 / 每回合回血 4% | 拖持久战 |
+| 龙 | 生命 +6 / 攻击 +5 | 单次伤害最高，但没有恢复手段 |
+
+物种倾向的具体数值**随等级缩放**（5 级为基准）。固定加成在低等级占比过大、
+高等级占比过小，实测会让同一个倾向在两端给出相反结论。
+
+**平衡是靠实测调出来的，不是靠看公式。** 中期（5 级）三个物种两两都在 41–59%，
+这条钉在 `BattleSimulatorTest.midGameIsBalanced` 里。
+
+### 6.8 请求访问日志
 
 对应 `PRD.md` 6.6。每个请求记录 **requestId、路径、耗时和结果码**：
 
