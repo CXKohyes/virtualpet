@@ -2,53 +2,61 @@
 import { computed } from 'vue'
 
 import { STATUS_LABELS } from '@/content/messages'
+import { STAGE_LABELS, spriteFor } from '@/content/petSprites'
 
 import type { Pet } from '@/types/pet'
 
 /**
- * 宠物舞台。
+ * 宠物舞台（PRD 4.2 第 3 项）。
  *
- * **批次 3 用纯 CSS 画占位宠物**，正式的程序化生成精灵图在第 4 批接入
- * （`scripts/generate_sprites.py` → `assets/pets/*.png`）。
- * 换渲染方式时只需要改这个组件，不影响 store 和游戏状态。
+ * 精灵图由 `scripts/generate_sprites.py` 程序化生成，9 张 64×64 的 PNG，
+ * 覆盖三个物种 × 三个进化阶段。这里只负责挑图、缩放和播动画，
+ * **不含任何游戏规则** —— 显示哪个形态完全由服务端给的 evolutionStage 决定。
+ *
+ * 尺寸固定 128px，正好是 64 的 2 倍整数缩放：像素图一旦按非整数倍缩放，
+ * 就会出现有的像素占 2 个屏幕像素、有的占 3 个的"毛边"。
  */
 const props = defineProps<{
   pet: Pet
   /** 正在执行的操作，用来播放对应的反馈动画。 */
   acting: string | null
+  /** 一次性强调动画：升级或进化（PRD 4.3）。 */
+  flash?: 'LEVEL_UP' | 'EVOLVE' | null
 }>()
-
-/** 进化阶段决定体型，0 幼年最小、2 最终形态最大。 */
-const scale = computed(() => [1, 1.18, 1.36][props.pet.evolutionStage] ?? 1)
 
 const speciesLabel = computed(
   () => ({ CAT: '猫', DOG: '狗', DRAGON: '像素龙' })[props.pet.species],
 )
 
+const sprite = computed(() => spriteFor(props.pet.species, props.pet.evolutionStage))
+
 /** 给读屏和图片替代文本用的描述（PRD 4.4）。 */
 const stageAlt = computed(
-  () => `${props.pet.name}，${speciesLabel.value}，当前${STATUS_LABELS[props.pet.status]}`,
+  () =>
+    `${props.pet.name}，${speciesLabel.value}，${STAGE_LABELS[props.pet.evolutionStage] ?? '幼年'}形态，` +
+    `当前${STATUS_LABELS[props.pet.status]}`,
 )
+
+const stateClasses = computed(() => ({
+  'is-asleep': props.pet.status === 'SLEEPING',
+  'is-sick': props.pet.status === 'SICK',
+  [`is-acting-${props.acting?.toLowerCase() ?? ''}`]: props.acting !== null,
+  'is-level-up': props.flash === 'LEVEL_UP',
+  'is-evolving': props.flash === 'EVOLVE',
+}))
 </script>
 
 <template>
-  <div class="pet-stage" :class="{ 'is-asleep': pet.status === 'SLEEPING' }">
-    <div
-      class="pet"
-      :class="[`pet--${pet.species.toLowerCase()}`, acting ? `is-acting-${acting.toLowerCase()}` : '']"
-      :style="{ '--pet-scale': scale }"
-      role="img"
-      :aria-label="stageAlt"
-    >
-      <span class="pet-ear pet-ear-left" aria-hidden="true" />
-      <span class="pet-ear pet-ear-right" aria-hidden="true" />
-      <span class="pet-body" aria-hidden="true">
-        <span class="pet-eye pet-eye-left" />
-        <span class="pet-eye pet-eye-right" />
-        <span class="pet-mouth" />
-        <span class="pet-tail" />
-      </span>
-    </div>
+  <div class="pet-stage">
+    <img
+      class="pet-sprite"
+      :class="stateClasses"
+      :src="sprite"
+      :alt="stageAlt"
+      width="64"
+      height="64"
+      draggable="false"
+    />
     <div class="stage-ground" aria-hidden="true" />
   </div>
 </template>
@@ -59,163 +67,73 @@ const stageAlt = computed(
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  min-height: 180px;
+  min-height: 200px;
   padding: var(--space-md);
   background: linear-gradient(180deg, var(--color-screen) 0%, #e8dcc0 100%);
   border: var(--border-pixel);
   box-shadow: var(--shadow-pixel);
 }
 
-.pet {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto auto;
-  justify-content: center;
-  transform: scale(var(--pet-scale, 1));
-  transform-origin: bottom center;
-  animation: bob 2.4s steps(2, end) infinite;
+/* 64px 的图按整数倍放大。**改动尺寸时只能取 64 的整数倍**（128、192、256），
+   非整数倍会让有的像素占 2 个屏幕像素、有的占 3 个，边缘就毛了。 */
+.pet-sprite {
+  width: 128px;
+  height: 128px;
+  image-rendering: pixelated;
+  transition: filter 200ms steps(2, end);
+  animation: pet-bob 1.8s steps(2, end) infinite;
 }
 
-.pet.is-asleep {
+/* 屏幕稍微宽一点就把主角放大，不然宠物在舞台里显得太小（PRD 4.2 舞台区）。
+   门槛取 420px：360px 的手机上舞台内宽只有 288px，塞 192px 的宠物就太挤了。 */
+@media (min-width: 420px) {
+  .pet-sprite {
+    width: 192px;
+    height: 192px;
+  }
+
+  .stage-ground {
+    width: 156px;
+  }
+}
+
+/* ---- 状态动画 ---- */
+
+.pet-sprite.is-asleep {
   animation: none;
-  opacity: 0.85;
+  filter: brightness(0.82) saturate(0.7);
 }
 
-/* ---- 身体 ---- */
-.pet-body {
-  position: relative;
-  grid-column: 1 / span 2;
-  width: 88px;
-  height: 76px;
-  border: 4px solid var(--border-pixel-color);
-  background: var(--pet-color, var(--color-warm-orange));
+.pet-sprite.is-sick {
+  animation: pet-sick 1.6s steps(2, end) infinite;
+  filter: saturate(0.55);
 }
 
-/* ---- 眼睛和嘴 ---- */
-.pet-eye {
-  position: absolute;
-  top: 26px;
-  width: 12px;
-  height: 12px;
-  background: var(--border-pixel-color);
+/* ---- 操作反馈 ---- */
+
+.pet-sprite.is-acting-feed {
+  animation: pet-nom 320ms steps(2, end) 3;
 }
 
-.pet-eye-left {
-  left: 16px;
+.pet-sprite.is-acting-play {
+  animation: pet-hop 260ms steps(2, end) 3;
 }
 
-.pet-eye-right {
-  right: 16px;
+.pet-sprite.is-acting-clean {
+  animation: pet-shake 200ms steps(2, end) 3;
 }
 
-/* 睡着时眼睛闭成一条线 */
-.is-asleep .pet-eye {
-  height: 4px;
-  top: 30px;
+/* ---- 升级 / 进化的一次性强调（PRD 4.3） ---- */
+
+.pet-sprite.is-level-up {
+  animation: pet-level-up 700ms steps(4, end) 2;
 }
 
-.pet-mouth {
-  position: absolute;
-  bottom: 18px;
-  left: 50%;
-  width: 20px;
-  height: 4px;
-  margin-left: -10px;
-  background: var(--border-pixel-color);
+.pet-sprite.is-evolving {
+  animation: pet-evolve 1100ms steps(5, end) 2;
 }
 
-/* ---- 耳朵 / 角：按物种换形状 ---- */
-.pet-ear {
-  width: 22px;
-  height: 22px;
-  border: 4px solid var(--border-pixel-color);
-  background: var(--pet-color, var(--color-warm-orange));
-}
-
-.pet-ear-left {
-  justify-self: end;
-}
-
-.pet-ear-right {
-  justify-self: start;
-}
-
-/* 猫：尖耳，三角形靠 clip-path 做 */
-.pet--cat .pet-ear {
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  border-width: 0 0 4px 0;
-}
-
-/* 狗：垂耳，扁而宽，挂在头两侧 */
-.pet--dog .pet-ear {
-  width: 20px;
-  height: 34px;
-  border-radius: 0 0 8px 8px;
-}
-
-/* 龙：角 + 翅膀，角更高更尖 */
-.pet--dragon .pet-ear {
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  border-width: 0 0 4px 0;
-  height: 30px;
-}
-
-/* ---- 尾巴 ----
-   放在 .pet-body 内部，位置相对身体算，保证一定接在身体上；
-   去掉左边框，让它读起来是从身体里"长出来"的而不是贴在旁边的方块。 */
-.pet-tail {
-  position: absolute;
-  right: -18px;
-  bottom: 12px;
-  width: 22px;
-  height: 12px;
-  border: 4px solid var(--border-pixel-color);
-  border-left: none;
-  background: var(--pet-color, var(--color-warm-orange));
-}
-
-.pet--dragon .pet-tail {
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
-  border-width: 4px 0 4px 0;
-  height: 20px;
-}
-
-/* ---- 物种配色 ---- */
-.pet--cat {
-  --pet-color: var(--color-warm-orange);
-}
-
-.pet--dog {
-  --pet-color: var(--color-cream);
-}
-
-.pet--dragon {
-  --pet-color: var(--color-sky-blue);
-}
-
-/* ---- 地面阴影 ---- */
-.stage-ground {
-  width: 110px;
-  height: 12px;
-  margin-top: var(--space-sm);
-  background: rgba(20, 38, 26, 0.28);
-  border-radius: 50%;
-}
-
-/* ---- 反馈动画 ---- */
-.pet.is-acting-feed {
-  animation: nom 320ms steps(2, end) 3;
-}
-
-.pet.is-acting-play {
-  animation: hop 260ms steps(2, end) 3;
-}
-
-.pet.is-acting-clean {
-  animation: shake 200ms steps(2, end) 3;
-}
-
-@keyframes bob {
+@keyframes pet-bob {
   0%,
   100% {
     translate: 0 0;
@@ -225,42 +143,100 @@ const stageAlt = computed(
   }
 }
 
-@keyframes nom {
+@keyframes pet-nom {
   0%,
   100% {
     scale: 1;
   }
   50% {
-    scale: 1.06;
+    scale: 1.07;
   }
 }
 
-@keyframes hop {
+@keyframes pet-hop {
   0%,
   100% {
     translate: 0 0;
   }
   50% {
-    translate: 0 -16px;
+    translate: 0 -18px;
   }
 }
 
-@keyframes shake {
+@keyframes pet-shake {
   0%,
   100% {
     rotate: 0deg;
   }
   50% {
-    rotate: 4deg;
+    rotate: 5deg;
   }
 }
 
-/* 系统开启"减弱动画"时只保留数值反馈（PRD 2.10） */
+@keyframes pet-sick {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 3px;
+  }
+}
+
+@keyframes pet-level-up {
+  0% {
+    translate: 0 0;
+    filter: none;
+  }
+  50% {
+    translate: 0 -20px;
+    filter: brightness(1.9) saturate(1.5);
+  }
+  100% {
+    translate: 0 0;
+    filter: none;
+  }
+}
+
+@keyframes pet-evolve {
+  0% {
+    scale: 1;
+    filter: brightness(1.6);
+  }
+  40% {
+    scale: 1.25;
+    filter: brightness(4) saturate(0);
+  }
+  70% {
+    scale: 1.15;
+    filter: brightness(2.2) saturate(1.4);
+  }
+  100% {
+    scale: 1;
+    filter: none;
+  }
+}
+
+/* ---- 地面阴影 ----
+   紧贴精灵下沿：精灵图里宠物是踩在画布底边的，中间留空就会像浮在半空。 */
+.stage-ground {
+  width: 104px;
+  height: 12px;
+  margin-top: 2px;
+  background: rgba(20, 38, 26, 0.28);
+  border-radius: 50%;
+}
+
+/* 系统开启"减弱动画"时全部停掉。数值和文案反馈仍然照常更新（PRD 2.10）。 */
 @media (prefers-reduced-motion: reduce) {
-  .pet,
-  .pet.is-acting-feed,
-  .pet.is-acting-play,
-  .pet.is-acting-clean {
+  .pet-sprite,
+  .pet-sprite.is-asleep,
+  .pet-sprite.is-sick,
+  .pet-sprite.is-acting-feed,
+  .pet-sprite.is-acting-play,
+  .pet-sprite.is-acting-clean,
+  .pet-sprite.is-level-up,
+  .pet-sprite.is-evolving {
     animation: none;
   }
 }

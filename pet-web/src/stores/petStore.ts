@@ -3,12 +3,26 @@ import { computed, ref } from 'vue'
 
 import { ApiError, serverNow } from '@/api/client'
 import { createPet, fetchJournal, fetchPet, performAction, resetPet } from '@/api/pet'
-import { messageForAction } from '@/content/messages'
+import { soundForAction, useAudio } from '@/composables/useAudio'
+import { createSpeechDirector } from '@/content/petLines'
 
+import type { SpeechContext, SpeechScene } from '@/content/petLines'
 import type { ActionOutcome, JournalEntry, Pet, PetAction, SettlementSummary, Species } from '@/types/pet'
 
 /** 日志区最多显示多少条，和服务端默认值保持一致。 */
 const JOURNAL_LIMIT = 20
+
+/** 空闲时两次主动开口之间至少隔多久。 */
+const IDLE_GAP_MS = 14000
+
+/** 操作 → 场景台词。睡觉和唤醒也各有自己的场景。 */
+const ACTION_SCENES: Record<PetAction, SpeechScene> = {
+  FEED: 'FEED',
+  PLAY: 'PLAY',
+  CLEAN: 'CLEAN',
+  SLEEP: 'SLEEP',
+  WAKE: 'WAKE',
+}
 
 /**
  * 宠物状态、操作与照护日志。
@@ -39,6 +53,28 @@ export const usePetStore = defineStore('pet', () => {
   // 冷却倒计时用服务端时间推算（client.ts 的 serverNow），不用本地时钟减
   const now = ref(serverNow())
   let timer: ReturnType<typeof setInterval> | null = null
+
+  // 台词和音效：台词不连续重复由 director 负责，音效静音由 uiStore 负责
+  const director = createSpeechDirector()
+  const audio = useAudio()
+  let lastSpokeAt = serverNow()
+
+  /** 说一句。场景优先，没有场景就按当前状态说（PRD 2.8）。 */
+  function say(context: SpeechContext): void {
+    speak(director.next(context))
+  }
+
+  /**
+   * 直接给一句现成的话。
+   *
+   * 必须同时更新 `lastSpokeAt`：领养时的开场白不走台词库，
+   * 忘了打时间戳的话，空闲台词会以为"很久没说话了"，
+   * 刚说完自我介绍就立刻插一句状态台词。
+   */
+  function speak(text: string): void {
+    speech.value = text
+    lastSpokeAt = serverNow()
+  }
 
   /** 各操作剩余冷却秒数，只包含仍在冷却中的。 */
   const cooldownSeconds = computed<Partial<Record<PetAction, number>>>(() => {
@@ -95,6 +131,48 @@ export const usePetStore = defineStore('pet', () => {
     journal.value = []
     offlineSummary.value = seeded?.settlement ?? null
     loadedOnce.value = true
+    if (seeded) {
+      greet(seeded)
+    }
+  }
+
+  /**
+   * 打开应用时的第一句话。
+   *
+   * 有结算摘要说明确实离开过一段时间 → 回访台词；这次结算把宠物推进了生病状态 →
+   * 生病台词（优先）。都没有就按当前状态说一句。
+   */
+  function greet(loadedPet: Pet): void {
+    const settlement = loadedPet.settlement
+    const justFellSick =
+      settlement !== null && settlement.statusAfter === 'SICK' && settlement.statusBefore !== 'SICK'
+
+    if (justFellSick) {
+      say({ species: loadedPet.species, scene: 'SICK', status: loadedPet.status })
+      audio.play('SICK')
+      return
+    }
+    say({
+      species: loadedPet.species,
+      scene: settlement ? 'RETURN' : undefined,
+      status: loadedPet.status,
+    })
+  }
+
+  /**
+   * 空闲时主动说一句当前状态的台词。
+   *
+   * 间隔由 `IDLE_GAP_MS` 控制：刚操作完就不要再插一句，
+   * 免得反馈文案被立刻顶掉。
+   */
+  function speakIdle(): void {
+    if (!pet.value || acting.value !== null) {
+      return
+    }
+    if (serverNow() - lastSpokeAt < IDLE_GAP_MS) {
+      return
+    }
+    say({ species: pet.value.species, status: pet.value.status })
   }
 
   /** 只拉照护日志。日志是次要信息，失败就保持空列表，不影响宠物状态。 */
@@ -119,6 +197,7 @@ export const usePetStore = defineStore('pet', () => {
       journal.value = entries
       offlineSummary.value = loadedPet.settlement
       loadedOnce.value = true
+      greet(loadedPet)
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'PET_NOT_FOUND') {
         clearPetState()
@@ -148,11 +227,14 @@ export const usePetStore = defineStore('pet', () => {
     loading.value = true
     error.value = null
     try {
-      pet.value = await createPet(species, name)
+      const created = await createPet(species, name)
+      pet.value = created
       loadedOnce.value = true
       journal.value = []
       offlineSummary.value = null
-      speech.value = `我是${name}，请多关照！`
+      // 换了一只宠物，重新开始记"上一条台词"
+      director.reset()
+      speak(`我是${name}，请多关照！`)
       return true
     } catch (cause) {
       error.value = describe(cause)
@@ -176,7 +258,7 @@ export const usePetStore = defineStore('pet', () => {
     acting.value = action
 
     try {
-      applyOutcome(await performAction(action, createRequestId()))
+      applyOutcome(await performAction(action, createRequestId()), action)
     } catch (cause) {
       // 失败回滚：按键的按压态在 finally 里清掉，这里只负责把原因呈现出来
       error.value = describe(cause)
@@ -185,13 +267,26 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
-  function applyOutcome(outcome: ActionOutcome): void {
+  function applyOutcome(outcome: ActionOutcome, action: PetAction): void {
     pet.value = outcome.pet
     // 操作前如果有离线结算，操作本身也顺带把它结算掉了，旧摘要就过期了
     offlineSummary.value = null
-    speech.value = messageForAction(outcome.messageKey)
     levelUpFlash.value = outcome.levelUp
     evolvedFlash.value = outcome.evolved
+
+    // 场景台词优先级：进化 > 升级 > 操作本身（PRD 2.8）
+    say({
+      species: outcome.pet.species,
+      scene: outcome.evolved ? 'EVOLVE' : outcome.levelUp ? 'LEVEL_UP' : ACTION_SCENES[action],
+      status: outcome.pet.status,
+    })
+
+    // 音效同一套优先级，只有喂食、玩耍、清洁有操作音（PRD 2.9）
+    const sound = outcome.evolved ? 'EVOLVE' : outcome.levelUp ? 'LEVEL_UP' : soundForAction(action)
+    if (sound) {
+      audio.play(sound)
+    }
+
     // 用服务端刚写下的那条日志更新列表，幂等重放时拿到的是同一条，不会重复记
     journal.value = [
       outcome.journalEntry,
@@ -221,6 +316,7 @@ export const usePetStore = defineStore('pet', () => {
     journal.value = []
     offlineSummary.value = null
     speech.value = ''
+    director.reset()
   }
 
   function dismissOfflineSummary(): void {
@@ -252,6 +348,7 @@ export const usePetStore = defineStore('pet', () => {
     load,
     loadJournal,
     ensureLoaded,
+    speakIdle,
     adopt,
     act,
     reset,

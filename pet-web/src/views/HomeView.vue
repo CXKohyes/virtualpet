@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { fetchGameConfig } from '@/api/gameConfig'
@@ -10,7 +10,8 @@ import PixelButton from '@/components/PixelButton.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import SpeechBubble from '@/components/SpeechBubble.vue'
 import StatusPanel from '@/components/StatusPanel.vue'
-import { ATTRIBUTE_META, STATUS_LABELS, STATUS_HINTS } from '@/content/messages'
+import { useIdleSpeech } from '@/composables/useIdleSpeech'
+import { ATTRIBUTE_META, FLASH_DURATION_MS, STATUS_LABELS, STATUS_HINTS } from '@/content/messages'
 import { usePetStore } from '@/stores/petStore'
 import { useUiStore } from '@/stores/uiStore'
 
@@ -55,16 +56,45 @@ const offlineChanges = computed(() => {
   )
 })
 
-/** 升级 / 进化的醒目提示（PRD 4.3）。 */
+/**
+ * 升级 / 进化的强调动画（PRD 4.3）。
+ *
+ * 存成一份自己的状态，而不是直接读 store 里的 levelUpFlash：
+ * 那两个标志要等动画放完才由 consumeFlash 清掉，动画时长才有处可放。
+ * 进化盖过升级 —— 两个同时发生时只演更隆重的那一个。
+ */
+const stageFlash = ref<'LEVEL_UP' | 'EVOLVE' | null>(null)
+let flashTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => [petStore.evolvedFlash, petStore.levelUpFlash] as const,
+  ([evolved, levelUp]) => {
+    if (!evolved && !levelUp) {
+      return
+    }
+    stageFlash.value = evolved ? 'EVOLVE' : 'LEVEL_UP'
+    if (flashTimer !== null) {
+      clearTimeout(flashTimer)
+    }
+    flashTimer = setTimeout(() => {
+      flashTimer = null
+      dismissFlash()
+    }, FLASH_DURATION_MS)
+  },
+)
+
+/** 升级 / 进化的醒目提示文字。 */
 const flashText = computed(() => {
-  if (petStore.evolvedFlash) {
+  if (stageFlash.value === 'EVOLVE') {
     return '进化了！'
   }
-  if (petStore.levelUpFlash) {
+  if (stageFlash.value === 'LEVEL_UP') {
     return '升级了！'
   }
   return ''
 })
+
+useIdleSpeech()
 
 onMounted(async () => {
   petStore.startClock()
@@ -90,6 +120,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   petStore.stopClock()
+  if (flashTimer !== null) {
+    clearTimeout(flashTimer)
+    flashTimer = null
+  }
 })
 
 async function onAction(action: PetAction): Promise<void> {
@@ -107,6 +141,7 @@ async function onReset(): Promise<void> {
 }
 
 function dismissFlash(): void {
+  stageFlash.value = null
   petStore.consumeFlash()
 }
 </script>
@@ -162,6 +197,7 @@ function dismissFlash(): void {
         v-if="flashText"
         type="button"
         class="home-flash"
+        :class="stageFlash === 'EVOLVE' ? 'is-evolve' : 'is-level-up'"
         @click="dismissFlash"
       >
         {{ flashText }}（点击关闭）
@@ -170,7 +206,7 @@ function dismissFlash(): void {
       <div class="home-layout">
         <section class="home-stage-area">
           <SpeechBubble :text="petStore.speech" />
-          <PetStage :pet="pet" :acting="petStore.acting" />
+          <PetStage :pet="pet" :acting="petStore.acting" :flash="stageFlash" />
           <ActionDock
             :acting="petStore.acting"
             :sleeping="petStore.sleeping"
@@ -251,6 +287,8 @@ function dismissFlash(): void {
   font-weight: 700;
 }
 
+/* 升级 / 进化的强调条。刻意留在正常文档流里、不覆盖舞台，
+   免得挡住操作按钮（PRD 4.4：动画不遮挡关键操作按钮）。 */
 .home-flash {
   width: 100%;
   margin-bottom: var(--space-sm);
@@ -263,6 +301,33 @@ function dismissFlash(): void {
   font-size: 1rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.home-flash.is-level-up {
+  animation: flash-pop 420ms steps(3, end) 3;
+}
+
+.home-flash.is-evolve {
+  background: var(--color-warm-orange);
+  animation: flash-pop 420ms steps(3, end) 4;
+}
+
+@keyframes flash-pop {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(-3px, -3px);
+    box-shadow: 6px 6px 0 var(--border-pixel-color);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-flash.is-level-up,
+  .home-flash.is-evolve {
+    animation: none;
+  }
 }
 
 .home-offline {

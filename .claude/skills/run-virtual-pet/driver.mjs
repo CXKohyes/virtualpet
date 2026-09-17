@@ -21,6 +21,35 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 
+/** 按键名 → CDP 需要的键码。只列验收用得上的几个。 */
+const KEYS = {
+  Tab: { code: 'Tab', key: 'Tab', vk: 9 },
+  Enter: { code: 'Enter', key: 'Enter', vk: 13 },
+  Escape: { code: 'Escape', key: 'Escape', vk: 27 },
+  Space: { code: 'Space', key: ' ', vk: 32 },
+  ArrowUp: { code: 'ArrowUp', key: 'ArrowUp', vk: 38 },
+  ArrowDown: { code: 'ArrowDown', key: 'ArrowDown', vk: 40 },
+  ArrowLeft: { code: 'ArrowLeft', key: 'ArrowLeft', vk: 37 },
+  ArrowRight: { code: 'ArrowRight', key: 'ArrowRight', vk: 39 },
+}
+
+/** 按一次真实的键。keyDown + keyUp，和手按键盘走同一条路径。 */
+async function pressKey(cdp, name) {
+  const spec = KEYS[name]
+  if (!spec) {
+    throw new Error(`不认识的按键: ${name}（可用：${Object.keys(KEYS).join(', ')}）`)
+  }
+  const base = {
+    windowsVirtualKeyCode: spec.vk,
+    nativeVirtualKeyCode: spec.vk,
+    code: spec.code,
+    key: spec.key,
+  }
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+  await new Promise((r) => setTimeout(r, 60))
+}
+
 // ---------------------------------------------------------------- 参数解析
 
 function parseArgs(argv) {
@@ -32,6 +61,8 @@ function parseArgs(argv) {
     prepareExpr: null,
     settleMs: 800,
     keepOpen: false,
+    chromeArgs: [],
+    presses: [],
   }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -52,8 +83,23 @@ function parseArgs(argv) {
     else if (arg === '--prepare') opts.prepareExpr = next()
     else if (arg === '--settle') opts.settleMs = Number(next())
     else if (arg === '--keep-open') opts.keepOpen = true
+    // 可重复。用来验证那些只能靠浏览器开关模拟的场景，
+    // 例如 --chrome-arg --force-prefers-reduced-motion（PRD 2.10）。
+    // 这里直接取下一个 argv，不走 next()：Chrome 的开关本身就以 -- 开头，
+    // next() 的"值不能以 -- 开头"守卫会把它们误判成漏了参数。
+    else if (arg === '--chrome-arg') {
+      const value = argv[i + 1]
+      if (value === undefined) {
+        throw new Error('参数 --chrome-arg 缺少值')
+      }
+      i += 1
+      opts.chromeArgs.push(value)
+    }
+    // 可重复。真实按键事件，用来验证键盘可达性 ——
+    // 页面里写 el.focus() 不会命中 :focus-visible，只有真按键才算数。
+    else if (arg === '--press') opts.presses.push(next())
     else if (arg === '--help' || arg === '-h') {
-      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--prepare JS] [--settle MS] [--keep-open]')
+      console.log('用法: node driver.mjs [--url URL] [--widths 360,768,1440] [--out DIR] [--eval JS] [--prepare JS] [--settle MS] [--chrome-arg FLAG] [--press KEY] [--keep-open]')
       process.exit(0)
     } else {
       throw new Error(`未知参数: ${arg}`)
@@ -91,7 +137,7 @@ function findBrowser() {
  * 用 --remote-debugging-port=0 让系统分配空闲端口，避免和别的调试实例撞端口；
  * 用每次运行唯一的 --user-data-dir，保证后面清理时只杀自己启的进程。
  */
-function launchBrowser(binary) {
+function launchBrowser(binary, extraArgs = []) {
   const userDataDir = join(tmpdir(), `pet-cdp-${process.pid}-${Date.now()}`)
 
   const child = spawn(
@@ -105,6 +151,7 @@ function launchBrowser(binary) {
       '--disable-background-networking',
       '--remote-debugging-port=0',
       `--user-data-dir=${userDataDir}`,
+      ...extraArgs,
       'about:blank',
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -286,7 +333,7 @@ async function main() {
   console.log(`浏览器: ${binary}`)
   console.log(`目标  : ${opts.url}`)
 
-  const browser = launchBrowser(binary)
+  const browser = launchBrowser(binary, opts.chromeArgs)
   const consoleMessages = []
   let cdp
 
@@ -320,6 +367,17 @@ async function main() {
       })
       await cdp.send('Page.navigate', { url: opts.url })
       await waitForRender(cdp)
+
+      // --prepare 和 --press 在 --eval 下同样生效：不然只能查初始页面，
+      // 主界面这类要走完领养流程才出现的状态根本查不到。
+      if (opts.prepareExpr) {
+        await evaluate(cdp, opts.prepareExpr)
+        await new Promise((r) => setTimeout(r, opts.settleMs))
+      }
+      for (const name of opts.presses) {
+        await pressKey(cdp, name)
+      }
+
       const value = await evaluate(cdp, opts.evalExpr)
       console.log(`\n--eval @${opts.widths[0]}px => ${JSON.stringify(value, null, 2)}`)
     } else {
@@ -342,6 +400,13 @@ async function main() {
         if (width === opts.widths[0] && opts.prepareExpr) {
           await evaluate(cdp, opts.prepareExpr)
           await new Promise((r) => setTimeout(r, opts.settleMs))
+        }
+
+        // 真按键放在 prepare 之后：先摆好界面，再用键盘走到要截图的位置
+        if (width === opts.widths[0]) {
+          for (const name of opts.presses) {
+            await pressKey(cdp, name)
+          }
         }
 
         const metrics = await evaluate(cdp, DEFAULT_PROBE)

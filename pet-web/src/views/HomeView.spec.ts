@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import { fetchGameConfig } from '@/api/gameConfig'
 import { fetchJournal, fetchPet, performAction } from '@/api/pet'
+import { FLASH_DURATION_MS } from '@/content/messages'
+import { spriteFor } from '@/content/petSprites'
 import HomeView from '@/views/HomeView.vue'
 
 import type { ActionOutcome, GameConfig, JournalEntry, Pet, SettlementSummary } from '@/types/pet'
@@ -338,5 +340,92 @@ describe('HomeView', () => {
     const feedButton = actionButtons(wrapper)[0]
     expect(feedButton?.attributes('disabled')).toBeUndefined()
     expect(feedButton?.attributes('title')).toBe('饱食低于 95')
+  })
+
+  it('舞台上渲染的是服务端给的进化阶段对应的精灵', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ species: 'DRAGON', evolutionStage: 2 }))
+    const { wrapper } = await mountView()
+
+    expect(wrapper.find('.pet-sprite').attributes('src')).toBe(spriteFor('DRAGON', 2))
+  })
+
+  it('精灵带完整替代文本：名字、物种、形态、状态（PRD 4.4）', async () => {
+    fetchPetMock.mockResolvedValue(
+      makePet({ name: '咪咪', species: 'CAT', evolutionStage: 1, status: 'HUNGRY' }),
+    )
+    const { wrapper } = await mountView()
+
+    const alt = wrapper.find('.pet-sprite').attributes('alt') ?? ''
+    expect(alt).toContain('咪咪')
+    expect(alt).toContain('猫')
+    expect(alt).toContain('成长')
+    expect(alt).toContain('饿了')
+  })
+
+  it('睡觉时精灵加 is-asleep，操作时加对应的反馈类', async () => {
+    fetchPetMock.mockResolvedValue(
+      makePet({ status: 'SLEEPING', sleepingSince: NOW.toISOString() }),
+    )
+    const { wrapper } = await mountView()
+
+    expect(wrapper.find('.pet-sprite').classes()).toContain('is-asleep')
+  })
+
+  it('升级时弹出强调提示并给精灵加上动画类（PRD 4.3）', async () => {
+    fetchPetMock.mockResolvedValue(makePet())
+    const { wrapper } = await mountView()
+
+    performActionMock.mockResolvedValue(makeOutcome({ levelUp: true }))
+    await actionButtons(wrapper)[0]?.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.find('.home-flash').exists()).toBe(true))
+    expect(wrapper.find('.home-flash').text()).toContain('升级了')
+    expect(wrapper.find('.pet-sprite').classes()).toContain('is-level-up')
+  })
+
+  it('进化比升级更隆重，提示和动画都换成进化的', async () => {
+    fetchPetMock.mockResolvedValue(makePet())
+    const { wrapper } = await mountView()
+
+    performActionMock.mockResolvedValue(
+      makeOutcome({ levelUp: true, evolved: true, pet: makePet({ level: 4, evolutionStage: 1 }) }),
+    )
+    await actionButtons(wrapper)[0]?.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.find('.home-flash').exists()).toBe(true))
+    expect(wrapper.find('.home-flash').text()).toContain('进化了')
+    expect(wrapper.find('.home-flash').classes()).toContain('is-evolve')
+    expect(wrapper.find('.pet-sprite').classes()).toContain('is-evolving')
+  })
+
+  it('强调提示会自动消失，不会一直挂着', async () => {
+    fetchPetMock.mockResolvedValue(makePet())
+    const { wrapper } = await mountView()
+
+    performActionMock.mockResolvedValue(makeOutcome({ levelUp: true }))
+    await actionButtons(wrapper)[0]?.trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('.home-flash').exists()).toBe(true))
+
+    // 本文件的 beforeEach 开了假计时器，直接把时钟推过去就行
+    await vi.advanceTimersByTimeAsync(FLASH_DURATION_MS + 100)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.home-flash').exists()).toBe(false)
+    expect(wrapper.find('.pet-sprite').classes()).not.toContain('is-level-up')
+  })
+
+  it('进化结束后舞台上换成新形态的精灵', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ evolutionStage: 0 }))
+    const { wrapper } = await mountView()
+    expect(wrapper.find('.pet-sprite').attributes('src')).toBe(spriteFor('CAT', 0))
+
+    performActionMock.mockResolvedValue(
+      makeOutcome({ evolved: true, pet: makePet({ evolutionStage: 1 }) }),
+    )
+    await actionButtons(wrapper)[0]?.trigger('click')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('.pet-sprite').attributes('src')).toBe(spriteFor('CAT', 1)),
+    )
   })
 })

@@ -2,7 +2,10 @@
   "extends": "@vue/tsconfig/tsconfig.dom.json",
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "types": ["vite/client"],
+    /* vite/client 提供图片等资源导入的类型；
+       node 只给测试用（petSprites.spec.ts 要读 PNG 头验证尺寸），
+       应用代码不要用 Node API。 */
+    "types": ["vite/client", "node"],
     "allowArbitraryExtensions": true,
 
     /* 项目要求：TypeScript 开启 strict，禁止用 any 绕过校验 */

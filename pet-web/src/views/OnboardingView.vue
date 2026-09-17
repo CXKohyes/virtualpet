@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import { fetchGameConfig } from '@/api/gameConfig'
 import PixelButton from '@/components/PixelButton.vue'
+import { spriteFor } from '@/content/petSprites'
 import { usePetStore } from '@/stores/petStore'
 
 import type { GameConfigSpecies, Species } from '@/types/pet'
@@ -131,6 +132,15 @@ async function submit(): Promise<void> {
         :class="{ 'is-selected': selected === code }"
       >
         <input v-model="selected" class="species-radio" type="radio" name="species" :value="code" />
+        <!-- 领养页展示的是一阶段（幼年）形态：玩家看到的正是领养到手的那个样子 -->
+        <img
+          class="species-sprite"
+          :src="spriteFor(code, 0)"
+          :alt="`${SPECIES_NAMES[code]}的幼年形态`"
+          width="64"
+          height="64"
+          draggable="false"
+        />
         <span class="species-name">{{ SPECIES_NAMES[code] }}</span>
         <span class="species-intro">{{ SPECIES_INTROS[code] }}</span>
         <span v-if="traitChips(code).length" class="species-traits">
@@ -228,6 +238,14 @@ async function submit(): Promise<void> {
 .species-card:has(.species-radio:focus-visible) {
   outline: 3px solid var(--color-sky-blue);
   outline-offset: 2px;
+}
+
+/* 64px 的图按 2 倍整数放大，和主界面舞台一致。
+   非整数倍会把像素重采样出毛边。 */
+.species-sprite {
+  width: 128px;
+  height: 128px;
+  image-rendering: pixelated;
 }
 
 .species-name {

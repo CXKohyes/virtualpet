@@ -23,6 +23,17 @@ canvas {
   image-rendering: pixelated;
 }
 
+/* 键盘焦点必须看得见（PRD 4.4「键盘可聚焦所有按钮」）。
+   用 :focus-visible 而不是 :focus：鼠标点过的按钮不该一直挂着个框。
+
+   这是**兜底**规则。PixelButton、领养页的卡片和输入框在各自的组件里
+   已经有更具体的焦点样式（选色也一致，都是天空蓝），会盖过这一条；
+   这里管的是那些没单独写过的按钮，例如设置弹窗的关闭键和离线提示条的「知道了」。 */
+:focus-visible {
+  outline: 3px solid var(--color-sky-blue);
+  outline-offset: 2px;
+}
+
 /* 尊重系统减弱动画偏好，关闭非必要动画但保留数值反馈（PRD 2.10） */
 @media (prefers-reduced-motion: reduce) {
   *,

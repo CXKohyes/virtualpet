@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { createPet, fetchJournal, fetchPet, performAction, resetPet } from '@/api/pet'
+import { PET_SCENE_LINES, PET_STATUS_LINES } from '@/content/petLines'
 import { usePetStore } from '@/stores/petStore'
 
 import type { ActionOutcome, JournalEntry, Pet, SettlementSummary } from '@/types/pet'
@@ -317,8 +318,9 @@ describe('petStore', () => {
       await store.act('FEED')
 
       expect(store.pet).toEqual(after)
-      expect(store.speech).toBe('吃得真香！')
       expect(store.acting).toBeNull()
+      // 台词改成按物种说话，猫喂食应该出自「猫 × 喂食」那个桶
+      expect(PET_SCENE_LINES.CAT.FEED).toContain(store.speech)
     })
 
     it('失败时回滚按压态并展示后端给的原因', async () => {
@@ -389,6 +391,138 @@ describe('petStore', () => {
       const store = usePetStore()
       await store.act('FEED')
       expect(performActionMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('性格台词（PRD 2.8）', () => {
+    it('操作后说的话出自该物种该操作的场景桶', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      const store = usePetStore()
+      await store.load()
+
+      performActionMock.mockResolvedValue(makeOutcome())
+      await store.act('PLAY')
+
+      expect(PET_SCENE_LINES.CAT.PLAY).toContain(store.speech)
+    })
+
+    it('换一个物种就说另一种话', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ species: 'DRAGON' }))
+      const store = usePetStore()
+      await store.load()
+
+      performActionMock.mockResolvedValue(makeOutcome({ pet: makePet({ species: 'DRAGON' }) }))
+      await store.act('CLEAN')
+
+      expect(PET_SCENE_LINES.DRAGON.CLEAN).toContain(store.speech)
+    })
+
+    it('进化台词盖过升级台词，升级台词盖过操作台词', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      const store = usePetStore()
+      await store.load()
+
+      performActionMock.mockResolvedValue(
+        makeOutcome({
+          pet: makePet({ level: 4, evolutionStage: 1 }),
+          levelUp: true,
+          evolved: true,
+        }),
+      )
+      await store.act('PLAY')
+
+      expect(PET_SCENE_LINES.CAT.EVOLVE).toContain(store.speech)
+    })
+
+    it('升级时说的是升级台词', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      const store = usePetStore()
+      await store.load()
+
+      performActionMock.mockResolvedValue(makeOutcome({ levelUp: true }))
+      await store.act('FEED')
+
+      expect(PET_SCENE_LINES.CAT.LEVEL_UP).toContain(store.speech)
+    })
+
+    it('打开应用时带着离线摘要就说回访台词', async () => {
+      const store = usePetStore()
+
+      store.seed(makePet({ settlement: makeSummary() }))
+
+      expect(PET_SCENE_LINES.CAT.RETURN).toContain(store.speech)
+    })
+
+    it('这次结算把宠物推进生病，优先说生病台词', async () => {
+      const store = usePetStore()
+
+      store.seed(
+        makePet({
+          status: 'SICK',
+          settlement: makeSummary({ statusBefore: 'HUNGRY', statusAfter: 'SICK' }),
+        }),
+      )
+
+      expect(PET_SCENE_LINES.CAT.SICK).toContain(store.speech)
+    })
+
+    it('刚打开没离开过就说当前状态的台词', async () => {
+      const store = usePetStore()
+
+      store.seed(makePet({ status: 'HUNGRY' }))
+
+      expect(PET_STATUS_LINES.CAT.HUNGRY).toContain(store.speech)
+    })
+
+    it('说话不连续重复', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      const store = usePetStore()
+      await store.load()
+
+      let previous = ''
+      for (let i = 0; i < 30; i += 1) {
+        performActionMock.mockResolvedValue(makeOutcome())
+        await store.act('FEED')
+        expect(store.speech).not.toBe(previous)
+        previous = store.speech
+      }
+    })
+  })
+
+  describe('空闲台词', () => {
+    it('刚操作完不会立刻插一句，免得顶掉操作反馈', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      const store = usePetStore()
+      await store.load()
+
+      performActionMock.mockResolvedValue(makeOutcome())
+      await store.act('FEED')
+      const afterAction = store.speech
+
+      store.speakIdle()
+
+      expect(store.speech).toBe(afterAction)
+    })
+
+    it('隔得够久就按当前状态说一句', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ status: 'SAD' }))
+      const store = usePetStore()
+      await store.load()
+      const afterLoad = store.speech
+
+      // 把时间推过空闲间隔
+      vi.setSystemTime(new Date(NOW.getTime() + 20_000))
+      store.speakIdle()
+
+      expect(store.speech).not.toBe(afterLoad)
+      expect(PET_STATUS_LINES.CAT.SAD).toContain(store.speech)
+    })
+
+    it('还没有宠物时不说话', () => {
+      const store = usePetStore()
+
+      expect(() => store.speakIdle()).not.toThrow()
+      expect(store.speech).toBe('')
     })
   })
 

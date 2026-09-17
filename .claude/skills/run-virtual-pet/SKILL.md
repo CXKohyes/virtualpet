@@ -83,14 +83,45 @@ node .claude/skills/run-virtual-pet/driver.mjs
 | `--prepare "<js>"` | 截图前先在页面里跑一段 JS，只在第一个宽度执行一次。用来把界面驱动到要验收的状态，例如先完成领养再看主界面 |
 | `--url <url>` | 换一个页面（默认 `http://localhost:5173/`） |
 | `--settle <ms>` | 渲染完成后额外等待（默认 800ms，测动画时加长） |
+| `--chrome-arg <flag>` | 追加一个浏览器开关，可重复。用来模拟只能靠开关造出来的环境，例如 `--chrome-arg --force-prefers-reduced-motion` |
+| `--press <键名>` | 发一次**真实按键**，可重复。支持 `Tab` `Enter` `Escape` `Space` 和四个方向键 |
 | `--keep-open` | 跑完不关浏览器，留着手动看 |
 
-`--eval` 示例（在页面里查任意东西，不截图）：
+`--prepare` 和 `--press` 在 `--eval` 模式下同样生效，顺序是 prepare → press → eval。
+
+`--eval` 的表达式是**原样**丢给 `Runtime.evaluate` 的，所以多行脚本要自己包一层 IIFE：
 
 ```powershell
 node .claude/skills/run-virtual-pet/driver.mjs --eval "({ buttons: document.querySelectorAll('button').length, bg: getComputedStyle(document.body).backgroundColor })"
 # => { "buttons": 0, "bg": "rgb(31, 61, 43)" }
 ```
+
+#### 键盘可达性（PRD 4.4）
+
+页面里写 `el.focus()` **不会**命中 `:focus-visible`，验不出焦点框。只有真按键才算数：
+
+```powershell
+node .claude/skills/run-virtual-pet/driver.mjs --widths 1440 `
+  --prepare "<先领养一只的脚本>" `
+  --press Tab --press Tab --press Tab --press Tab --press Tab `
+  --eval "(() => { const el = document.activeElement; const cs = getComputedStyle(el); return { 焦点: el.textContent.trim(), 轮廓: cs.outlineWidth + ' ' + cs.outlineStyle } })()"
+# => { "焦点": "睡觉", "轮廓": "3px solid" }
+```
+
+#### 减弱动画（PRD 2.10）
+
+要量的是真的在动的元素。主界面之前（例如领养页）没有任何动画，随便挑一个元素查 `animationName` 两种模式下都会是 `none`，看不出区别：
+
+```powershell
+node .claude/skills/run-virtual-pet/driver.mjs --widths 1440 `
+  --prepare "<先领养一只的脚本>" `
+  --chrome-arg --force-prefers-reduced-motion `
+  --eval "(() => { const s = getComputedStyle(document.querySelector('.pet-sprite')); return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, duration: s.animationDuration, name: s.animationName } })()"
+# 加上开关 => { "reduced": true,  "duration": "1e-06s", "name": "none" }
+# 去掉开关 => { "reduced": false, "duration": "1.8s",   "name": "pet-bob-xxxx" }
+```
+
+动画停掉，但**数值和文案反馈照常**：升级提示条依然会出现在页面上，只是不再抖动。
 
 ### 退出码
 

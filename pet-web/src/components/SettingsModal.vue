@@ -49,11 +49,15 @@ function cancelConfirm(): void {
 
       <div class="modal-row">
         <span class="modal-label">音效</span>
-        <PixelButton :hint="soundMuted ? '当前静音' : '当前开启'" @press="emit('toggleSound')">
+        <PixelButton
+          :hint="soundMuted ? '点击开启音效' : '点击静音'"
+          :aria-pressed="soundMuted"
+          @press="emit('toggleSound')"
+        >
           {{ soundMuted ? '已静音' : '开启中' }}
         </PixelButton>
       </div>
-      <p class="modal-note">音效开关会记在本机。合成音效在下一批次接入。</p>
+      <p class="modal-note">音效开关会记在本机，下次打开还是这个设置。</p>
 
       <div class="modal-row modal-row--danger">
         <span class="modal-label">重新领养</span>

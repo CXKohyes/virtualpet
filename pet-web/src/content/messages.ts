@@ -55,6 +55,14 @@ export const STATUS_HINTS: Record<PetStatus, string> = {
   SLEEPING: '正在休息',
 }
 
+/**
+ * 升级 / 进化强调提示挂多久（PRD 4.3）。
+ *
+ * 放在这里而不是组件里，是为了让主界面和它的测试读同一个值 ——
+ * 测试自己写一个 2600 的话，改了组件两边就对不上了。
+ */
+export const FLASH_DURATION_MS = 2600
+
 /** 五项属性的中文名与顺序，状态区按这个顺序渲染。 */
 export const ATTRIBUTE_META = [
   { key: 'satiety', label: '饱食' },
