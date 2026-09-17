@@ -1,0 +1,35 @@
+/**
+ * 全局基础样式：像素渲染和可访问性基线。
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink-green);
+  color: var(--color-cream);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: none;
+}
+
+/* 像素图统一使用最近邻缩放，禁止模糊插值（AGENTS.md 5.3） */
+img,
+canvas {
+  image-rendering: pixelated;
+}
+
+/* 尊重系统减弱动画偏好，关闭非必要动画但保留数值反馈（PRD 2.10） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

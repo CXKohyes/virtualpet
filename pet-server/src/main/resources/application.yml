@@ -1,0 +1,43 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: pet-server
+  datasource:
+    # 本机 MySQL 5.7。数据库和账号需要先按 README 的「MySQL 前置条件」准备好。
+    url: jdbc:mysql://localhost:3306/virtual_pet?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
+    username: ${PET_DB_USERNAME:pet_app}
+    # 密码只从环境变量注入，禁止写进仓库；本地可用 application-local.yml 覆盖。
+    password: ${PET_DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+# 健康检查：GET /actuator/health
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.virtualpet: DEBUG

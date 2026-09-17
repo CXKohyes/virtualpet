@@ -1,0 +1,27 @@
+# 接口测试专用配置：H2 的 MySQL 兼容模式。
+#
+# 目的：接口测试不依赖本机 MySQL，也不依赖 Docker。
+# 表结构仍由同一份 Liquibase changelog 建立，所以迁移脚本的语法
+# 只要在 MySQL 5.7 和 H2 MySQL 模式下都能跑，测试就有意义。
+#
+# 真实 MySQL 的冒烟测试见 docs/api.md 的说明。
+
+spring:
+  datasource:
+    # 注意：不要加 DATABASE_TO_LOWER=TRUE。加了之后 H2 把标识符转成小写，
+    # 而 Liquibase 判断自己的 DATABASECHANGELOG 表是否存在时用的是大写名字，
+    # 两者对不上会让它以为表不存在、再去 CREATE 一次，于是报 "already exists"。
+    # 同一个 JVM 里只要有两个不同的 Spring 上下文（比如带不带 @AutoConfigureMockMvc），
+    # 就会踩到这个坑。默认的大写标识符 + H2 对未加引号标识符大小写不敏感就够了。
+    url: jdbc:h2:mem:virtual_pet;MODE=MySQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+logging:
+  level:
+    root: WARN
+    com.virtualpet: INFO

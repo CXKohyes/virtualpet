@@ -1,0 +1,17 @@
+# dev profile：启用开发用的时间推进接口，并打开 SQL 日志。
+#
+# 激活方式（PowerShell）：
+#   $env:JAVA_HOME = 'D:\JDK1'
+#   mvn -f pet-server/pom.xml spring-boot:run -Dspring-boot.run.profiles=dev
+#
+# 生产环境绝对不能激活这个 profile：它会注册 /api/v1/dev/advance-time，
+# 允许调用方随意推进宠物时间。
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.virtualpet: DEBUG
+    org.springframework.web: INFO

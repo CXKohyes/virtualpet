@@ -1,0 +1,30 @@
+/**
+ * 主题变量：颜色、边框、间距和字号。
+ * 视觉方向见 PRD 4.1：深色外框、浅色内屏、粗描边、高对比色块，主色为墨绿、米黄、暖橙、珊瑚红、天空蓝。
+ */
+:root {
+  /* 调色板 */
+  --color-ink-green: #1f3d2b;
+  --color-ink-green-dark: #14261a;
+  --color-cream: #f2e6c9;
+  --color-screen: #fdf6e3;
+  --color-warm-orange: #e08a3c;
+  --color-coral: #d9534f;
+  --color-sky-blue: #4a90d9;
+
+  /* 像素边框：统一粗描边 */
+  --border-pixel-width: 4px;
+  --border-pixel-color: var(--color-ink-green-dark);
+  --border-pixel: var(--border-pixel-width) solid var(--border-pixel-color);
+  --shadow-pixel: 4px 4px 0 var(--border-pixel-color);
+
+  /* 间距 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+
+  /* 字体：未确认授权的中文像素字体一律不用，回退系统字体（PRD 4.1） */
+  --font-ui: system-ui, 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  --font-mono: ui-monospace, Consolas, 'Courier New', monospace;
+}
