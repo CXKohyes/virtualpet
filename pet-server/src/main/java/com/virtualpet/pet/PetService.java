@@ -19,6 +19,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 宠物的读取、创建与重置。
@@ -115,16 +116,34 @@ public class PetService {
     /**
      * 读取宠物并结算到当前时刻。
      *
-     * <p>睡觉期间如果自动醒来，这里同时补发睡觉经验。</p>
+     * <p>睡觉期间如果自动醒来，这里同时补发睡觉经验。
+     * 返回的 {@link PetSnapshot#settlement()} 是本次结算的变化摘要，
+     * 供前端展示「你不在时发生了什么」（PRD 2.5、4.3）。</p>
      */
-    public Pet load(Long playerId) {
+    public PetSnapshot load(Long playerId) {
+        return loadIfPresent(playerId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PET_NOT_FOUND));
+    }
+
+    /**
+     * 读取宠物并结算，还没有领养时返回空。
+     *
+     * <p>会话接口用它，省去"先查一次在不在、再读一次"的两次查询。</p>
+     */
+    public Optional<PetSnapshot> loadIfPresent(Long playerId) {
         return writer.runWithRetry(() -> {
-            Pet pet = requirePet(playerId);
+            Pet pet = findPet(playerId);
+            if (pet == null) {
+                return Optional.<PetSnapshot>empty();
+            }
 
             SettlementResult settlement = writer.settle(pet);
             if (!settlement.changed()) {
-                return pet;
+                return Optional.of(PetSnapshot.withoutSettlement(pet));
             }
+
+            // 结算前的状态要在写入之前抓，写完就看不到了
+            PetStatus statusBefore = PetConverter.toState(pet).status();
 
             writer.applySettlement(pet, settlement);
             if (settlement.wokeUp()) {
@@ -135,7 +154,15 @@ public class PetService {
             }
             writer.touch(pet);
             writer.updateOrConflict(pet);
-            return pet;
+
+            SettlementSummary summary = new SettlementSummary(
+                    settlement.settledHours(),
+                    AttributeDeltas.between(settlement.before(), settlement.after()),
+                    statusBefore.name(),
+                    pet.getStatus(),
+                    settlement.wokeUp(),
+                    settlement.sleptHours());
+            return Optional.of(new PetSnapshot(pet, summary));
         });
     }
 
@@ -156,8 +183,13 @@ public class PetService {
         log.info("玩家 {} 重置了存档，删除宠物 {}", playerId, pet.getId());
     }
 
-    /** 实体转对外响应，同时算出还在冷却中的操作。 */
+    /** 不涉及懒结算的路径用它（领养、执行操作），{@code settlement} 为 null。 */
     public PetResponse toResponse(Pet pet) {
+        return toResponse(pet, null);
+    }
+
+    /** 实体转对外响应，同时算出还在冷却中的操作。 */
+    public PetResponse toResponse(Pet pet, SettlementSummary settlement) {
         return new PetResponse(
                 pet.getId(),
                 pet.getSpecies(),
@@ -173,7 +205,8 @@ public class PetService {
                 pet.getEvolutionStage(),
                 pet.getSleepingSince(),
                 pet.getLastSettledAt(),
-                activeCooldowns(pet.getId()));
+                activeCooldowns(pet.getId()),
+                settlement);
     }
 
     /** 仍在冷却中的操作 -> 冷却结束时刻。无冷却的操作不会出现在结果里。 */

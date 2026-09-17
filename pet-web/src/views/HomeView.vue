@@ -10,7 +10,7 @@ import PixelButton from '@/components/PixelButton.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import SpeechBubble from '@/components/SpeechBubble.vue'
 import StatusPanel from '@/components/StatusPanel.vue'
-import { STATUS_LABELS } from '@/content/messages'
+import { ATTRIBUTE_META, STATUS_LABELS, STATUS_HINTS } from '@/content/messages'
 import { usePetStore } from '@/stores/petStore'
 import { useUiStore } from '@/stores/uiStore'
 
@@ -40,6 +40,21 @@ const serverTimeText = computed(() =>
   }),
 )
 
+/**
+ * 离线期间真正发生变化的那几项，变化为 0 的不列出来，免得刷屏。
+ *
+ * 这里只是把服务端给的差值排排版，不做任何计算。
+ */
+const offlineChanges = computed(() => {
+  const summary = petStore.offlineSummary
+  if (!summary) {
+    return []
+  }
+  return ATTRIBUTE_META.map((meta) => ({ label: meta.label, delta: summary.deltas[meta.key] })).filter(
+    (change) => change.delta !== 0,
+  )
+})
+
 /** 升级 / 进化的醒目提示（PRD 4.3）。 */
 const flashText = computed(() => {
   if (petStore.evolvedFlash) {
@@ -53,13 +68,15 @@ const flashText = computed(() => {
 
 onMounted(async () => {
   petStore.startClock()
-  // 守卫通常已经拉过了，ensureLoaded 是幂等的
+  // 会话接口已经把宠物（含离线摘要）种进来了，ensureLoaded 此时是空操作；
+  // 直接用页面地址进来（没走会话）时它才会真的去拉。
   await petStore.ensureLoaded()
   if (pet.value === null) {
     // 没有宠物就回领养页，避免停留在空界面上
     await router.push({ name: 'onboarding' })
     return
   }
+  await petStore.loadJournal()
   try {
     const config = await fetchGameConfig()
     requirements.value = Object.fromEntries(
@@ -111,6 +128,35 @@ function dismissFlash(): void {
       </header>
 
       <p v-if="petStore.error" class="home-alert" role="alert">{{ petStore.error }}</p>
+
+      <!-- 回访时优先展示「你不在时发生了什么」（PRD 2.5、4.3） -->
+      <section v-if="petStore.offlineSummary" class="home-offline" aria-live="polite">
+        <p class="home-offline-title">
+          你不在的 {{ petStore.offlineSummary.settledHours }} 小时里：
+        </p>
+        <p class="home-offline-body">
+          <span v-for="change in offlineChanges" :key="change.label" class="home-offline-item">
+            {{ change.label }} {{ change.delta > 0 ? '+' : '' }}{{ change.delta }}
+          </span>
+          <span
+            v-if="petStore.offlineSummary.statusAfter !== petStore.offlineSummary.statusBefore"
+            class="home-offline-item"
+          >
+            状态「{{ STATUS_LABELS[petStore.offlineSummary.statusAfter] }}」·
+            {{ STATUS_HINTS[petStore.offlineSummary.statusAfter] }}
+          </span>
+          <span v-if="petStore.offlineSummary.wokeUp" class="home-offline-item">
+            睡了 {{ petStore.offlineSummary.sleptHours }} 小时后自己醒了
+          </span>
+        </p>
+        <button
+          type="button"
+          class="home-offline-close"
+          @click="petStore.dismissOfflineSummary()"
+        >
+          知道了
+        </button>
+      </section>
 
       <button
         v-if="flashText"
@@ -215,6 +261,49 @@ function dismissFlash(): void {
   color: var(--color-ink-green-dark);
   font-family: var(--font-ui);
   font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.home-offline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  align-items: baseline;
+  margin-bottom: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 3px solid var(--border-pixel-color);
+  background: var(--color-cream);
+  box-shadow: var(--shadow-pixel);
+  color: var(--color-ink-green);
+}
+
+.home-offline-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.home-offline-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.home-offline-item {
+  padding: 0 var(--space-xs);
+  background: var(--color-screen);
+}
+
+.home-offline-close {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 var(--space-sm);
+  border: 2px solid var(--border-pixel-color);
+  background: var(--color-warm-orange);
+  color: var(--color-ink-green-dark);
+  font-family: var(--font-ui);
   font-weight: 700;
   cursor: pointer;
 }

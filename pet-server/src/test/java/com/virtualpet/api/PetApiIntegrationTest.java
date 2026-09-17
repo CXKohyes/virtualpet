@@ -241,6 +241,9 @@ class PetApiIntegrationTest {
                 .isEqualTo(first.path("deltas").path("satiety").asInt());
         assertThat(replay.path("pet").path("exp").asInt()).isEqualTo(6);
         assertThat(replay.path("pet").path("satiety").asInt()).isEqualTo(100);
+        // 回放返回的是当初那条日志，前端据此更新日志区就不会重复记一笔
+        assertThat(replay.path("journalEntry").path("id").asLong())
+                .isEqualTo(first.path("journalEntry").path("id").asLong());
 
         // 再来一个全新的 clientRequestId 才会撞冷却
         assertThat(codeOf(act(session, "FEED", "another-id", 429))).isEqualTo("ACTION_COOLDOWN");
@@ -418,6 +421,116 @@ class PetApiIntegrationTest {
         JsonNode again = dataOf(getJson("/api/v1/pets/me", session.token(), 200));
         assertThat(again.path("health").asInt()).isZero();
         assertThat(again.path("status").asText()).isEqualTo("SICK");
+    }
+
+    @Test
+    @DisplayName("离线后查询会带上结算摘要（PRD 2.5）")
+    void settlementSummaryIsReturned() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+
+        // 刚创建完立刻查：没有经过时间，不该有摘要
+        JsonNode immediate = dataOf(getJson("/api/v1/pets/me", session.token(), 200));
+        assertThat(immediate.path("settlement").isNull()).isTrue();
+
+        rewindTime(session, 12);
+        JsonNode summary = dataOf(getJson("/api/v1/pets/me", session.token(), 200)).path("settlement");
+
+        assertThat(summary.path("settledHours").asLong()).isEqualTo(12);
+        assertThat(summary.path("deltas").path("satiety").asInt()).isEqualTo(-60);
+        assertThat(summary.path("deltas").path("mood").asInt()).isEqualTo(-48);
+        assertThat(summary.path("deltas").path("hygiene").asInt()).isEqualTo(-27);
+        assertThat(summary.path("deltas").path("energy").asInt()).isEqualTo(-48);
+        assertThat(summary.path("deltas").path("health").asInt()).isEqualTo(-24);
+        assertThat(summary.path("statusBefore").asText()).isEqualTo("NORMAL");
+        assertThat(summary.path("statusAfter").asText()).isEqualTo("HUNGRY");
+        assertThat(summary.path("wokeUp").asBoolean()).isFalse();
+
+        // 紧接着再查一次：时间没有前进，摘要又回到 null
+        JsonNode again = dataOf(getJson("/api/v1/pets/me", session.token(), 200));
+        assertThat(again.path("settlement").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("睡觉中途醒来时摘要会标明 wokeUp")
+    void settlementSummaryReportsWakingUp() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+        act(session, "PLAY", "req-play", 200);
+        act(session, "SLEEP", "req-sleep", 200);
+
+        rewindTime(session, 3);
+        JsonNode summary = dataOf(getJson("/api/v1/pets/me", session.token(), 200)).path("settlement");
+
+        assertThat(summary.path("wokeUp").asBoolean()).isTrue();
+        assertThat(summary.path("sleptHours").asLong()).isEqualTo(3);
+        assertThat(summary.path("statusBefore").asText()).isEqualTo("SLEEPING");
+    }
+
+    @Test
+    @DisplayName("照护日志来自数据库，新的在前，刷新页面也还在")
+    void journalIsServedFromDatabase() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal", session.token(), 200)).size()).isZero();
+
+        JsonNode feedAck = dataOf(act(session, "FEED", "journal-1", 200));
+        act(session, "PLAY", "journal-2", 200);
+
+        JsonNode entries = dataOf(getJson("/api/v1/pets/me/journal", session.token(), 200));
+        assertThat(entries.size()).isEqualTo(2);
+
+        // 操作响应里带回来的那条，就是日志列表里的那一条
+        assertThat(feedAck.path("journalEntry").path("id").asLong())
+                .isEqualTo(entries.get(1).path("id").asLong());
+
+        // 新的在前
+        assertThat(entries.get(0).path("action").asText()).isEqualTo("PLAY");
+        assertThat(entries.get(1).path("action").asText()).isEqualTo("FEED");
+        assertThat(entries.get(1).path("xpGained").asInt()).isEqualTo(6);
+        assertThat(entries.get(1).path("messageKey").asText()).isEqualTo("FEED_OK");
+        assertThat(entries.get(1).path("levelUp").asBoolean()).isFalse();
+        assertThat(entries.get(1).path("deltas").path("mood").asInt()).isEqualTo(3);
+        assertThat(entries.get(1).path("at").asText()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("日志条数会被钳制在 1–50")
+    void journalLimitIsClamped() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+        act(session, "FEED", "limit-1", 200);
+        act(session, "PLAY", "limit-2", 200);
+
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal?limit=1", session.token(), 200)).size())
+                .isEqualTo(1);
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal?limit=999", session.token(), 200)).size())
+                .isEqualTo(2);
+        // 0 和负数被抬到 1，而不是报错
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal?limit=0", session.token(), 200)).size())
+                .isEqualTo(1);
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal?limit=-5", session.token(), 200)).size())
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("日志接口同样需要令牌，且重置存档后清空")
+    void journalFollowsResetAndAuth() throws Exception {
+        Session session = newSession();
+
+        mockMvc.perform(get("/api/v1/pets/me/journal")).andExpect(status().isUnauthorized());
+
+        createPet(session, "CAT", "Mimi");
+        act(session, "FEED", "reset-journal", 200);
+        assertThat(dataOf(getJson("/api/v1/pets/me/journal", session.token(), 200)).size()).isEqualTo(1);
+
+        mockMvc.perform(delete("/api/v1/pets/me").header(HttpHeaders.AUTHORIZATION, bearer(session)))
+                .andExpect(status().isOk());
+
+        // 宠物没了，日志也一起删了
+        assertThat(codeOf(getJson("/api/v1/pets/me/journal", session.token(), 404)))
+                .isEqualTo("PET_NOT_FOUND");
     }
 
     // ================================================================ 配置与重置

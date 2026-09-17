@@ -12,6 +12,8 @@ import java.time.Instant;
  * @param evolved       是否进化
  * @param messageKey    给前端选台词用的键，例如 {@code FEED_OK}
  * @param cooldownUntil 该操作的冷却结束时刻；无冷却时为 {@code null}
+ * @param journalEntry  这次操作刚写进日志的那一条，前端直接拿它更新日志区，
+ *                      不用再发一次请求去拉日志列表
  */
 public record ActionResponse(
         PetResponse pet,
@@ -20,5 +22,6 @@ public record ActionResponse(
         boolean levelUp,
         boolean evolved,
         String messageKey,
-        Instant cooldownUntil) {
+        Instant cooldownUntil,
+        JournalEntryResponse journalEntry) {
 }

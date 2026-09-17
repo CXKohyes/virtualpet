@@ -2,8 +2,10 @@ package com.virtualpet.dev;
 
 import com.virtualpet.auth.PlayerContext;
 import com.virtualpet.common.ApiResponse;
+import com.virtualpet.pet.Pet;
 import com.virtualpet.pet.PetResponse;
 import com.virtualpet.pet.PetService;
+import com.virtualpet.pet.PetSnapshot;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,12 +36,19 @@ public class DevTimeController {
         this.playerContext = playerContext;
     }
 
-    /** 推进时间并立即结算，返回结算后的宠物。 */
+    /** 推进时间；默认推进后立即结算。 */
     @PostMapping("/advance-time")
     public ApiResponse<PetResponse> advanceTime(@Valid @RequestBody AdvanceTimeRequest request) {
         Long playerId = playerContext.playerId();
-        devTimeService.rewind(playerId, request.hours());
-        // 挪完游标后立刻按真实规则结算，调用方直接拿到结果
-        return ApiResponse.ok(petService.toResponse(petService.load(playerId)));
+        Pet pet = devTimeService.rewind(playerId, request.hours());
+
+        if (!request.shouldSettle()) {
+            // 只挪游标，把结算留给下一次读取，这样才能看到回访提示
+            return ApiResponse.ok(petService.toResponse(pet));
+        }
+
+        // 挪完游标后立刻按真实规则结算，调用方直接拿到结果（含结算摘要）
+        PetSnapshot snapshot = petService.load(playerId);
+        return ApiResponse.ok(petService.toResponse(snapshot.pet(), snapshot.settlement()));
     }
 }

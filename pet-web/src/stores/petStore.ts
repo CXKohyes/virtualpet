@@ -2,27 +2,16 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { ApiError, serverNow } from '@/api/client'
-import { createPet, fetchPet, performAction, resetPet } from '@/api/pet'
+import { createPet, fetchJournal, fetchPet, performAction, resetPet } from '@/api/pet'
 import { messageForAction } from '@/content/messages'
 
-import type { ActionOutcome, Pet, PetAction, Species } from '@/types/pet'
+import type { ActionOutcome, JournalEntry, Pet, PetAction, SettlementSummary, Species } from '@/types/pet'
 
-/** 照护日志的一条记录。 */
-export interface JournalEntry {
-  id: number
-  at: number
-  action: PetAction
-  message: string
-  xpGained: number
-  levelUp: boolean
-  evolved: boolean
-}
-
-/** 日志区最多保留多少条，避免长时间挂着页面无限增长。 */
+/** 日志区最多显示多少条，和服务端默认值保持一致。 */
 const JOURNAL_LIMIT = 20
 
 /**
- * 宠物状态与操作。
+ * 宠物状态、操作与照护日志。
  *
  * 两条铁律：
  *
@@ -37,7 +26,10 @@ export const usePetStore = defineStore('pet', () => {
   /** 正在执行的操作，按钮据此进入按压态。 */
   const acting = ref<PetAction | null>(null)
   const error = ref<string | null>(null)
+  /** 照护日志，来自服务端。 */
   const journal = ref<JournalEntry[]>([])
+  /** 本次读取结算出来的离线变化摘要，用户关掉后清空。 */
+  const offlineSummary = ref<SettlementSummary | null>(null)
   /** 性格气泡当前展示的短句。 */
   const speech = ref('')
   /** 升级、进化的一次性提示，由界面消费后清掉。 */
@@ -71,8 +63,6 @@ export const usePetStore = defineStore('pet', () => {
   /** 是否正在睡觉，决定操作区第四个按钮是「睡觉」还是「唤醒」。 */
   const sleeping = computed(() => pet.value?.sleepingSince !== null && pet.value?.sleepingSince !== undefined)
 
-  let journalSequence = 0
-
   function startClock(): void {
     if (timer !== null) {
       return
@@ -93,16 +83,45 @@ export const usePetStore = defineStore('pet', () => {
   /** 是否已经向后端确认过有没有宠物。 */
   const loadedOnce = ref(false)
 
-  /** 拉取宠物状态。还没领养不算错误，只是把 pet 置空。 */
+  /**
+   * 用会话接口带回来的宠物初始化。
+   *
+   * 会话响应里的宠物已经经过结算，并且带着离线摘要 —— 那正是「回访」的那一刻。
+   * 直接用掉它，**不要再发一次 `GET /pets/me`**：后端的读取路径都会先结算，
+   * 第二次读时时间已经被第一次结算完了，摘要会变成 null 丢掉。
+   */
+  function seed(seeded: Pet | null): void {
+    pet.value = seeded
+    journal.value = []
+    offlineSummary.value = seeded?.settlement ?? null
+    loadedOnce.value = true
+  }
+
+  /** 只拉照护日志。日志是次要信息，失败就保持空列表，不影响宠物状态。 */
+  async function loadJournal(): Promise<void> {
+    try {
+      journal.value = await fetchJournal(JOURNAL_LIMIT)
+    } catch {
+      journal.value = []
+    }
+  }
+
+  /** 拉取宠物状态和照护日志。还没领养不算错误，只是把状态清空。 */
   async function load(): Promise<void> {
     loading.value = true
     error.value = null
     try {
-      pet.value = await fetchPet()
+      const [loadedPet, entries] = await Promise.all([
+        fetchPet(),
+        fetchJournal(JOURNAL_LIMIT).catch(() => [] as JournalEntry[]),
+      ])
+      pet.value = loadedPet
+      journal.value = entries
+      offlineSummary.value = loadedPet.settlement
       loadedOnce.value = true
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'PET_NOT_FOUND') {
-        pet.value = null
+        clearPetState()
         loadedOnce.value = true
       } else {
         error.value = describe(cause)
@@ -132,6 +151,7 @@ export const usePetStore = defineStore('pet', () => {
       pet.value = await createPet(species, name)
       loadedOnce.value = true
       journal.value = []
+      offlineSummary.value = null
       speech.value = `我是${name}，请多关照！`
       return true
     } catch (cause) {
@@ -156,8 +176,7 @@ export const usePetStore = defineStore('pet', () => {
     acting.value = action
 
     try {
-      const outcome = await performAction(action, createRequestId())
-      applyOutcome(outcome)
+      applyOutcome(await performAction(action, createRequestId()))
     } catch (cause) {
       // 失败回滚：按键的按压态在 finally 里清掉，这里只负责把原因呈现出来
       error.value = describe(cause)
@@ -168,21 +187,15 @@ export const usePetStore = defineStore('pet', () => {
 
   function applyOutcome(outcome: ActionOutcome): void {
     pet.value = outcome.pet
+    // 操作前如果有离线结算，操作本身也顺带把它结算掉了，旧摘要就过期了
+    offlineSummary.value = null
     speech.value = messageForAction(outcome.messageKey)
     levelUpFlash.value = outcome.levelUp
     evolvedFlash.value = outcome.evolved
-
+    // 用服务端刚写下的那条日志更新列表，幂等重放时拿到的是同一条，不会重复记
     journal.value = [
-      {
-        id: (journalSequence += 1),
-        at: Date.now(),
-        action: outcome.messageKey.replace(/_OK$/, '') as PetAction,
-        message: messageForAction(outcome.messageKey),
-        xpGained: outcome.xpGained,
-        levelUp: outcome.levelUp,
-        evolved: outcome.evolved,
-      },
-      ...journal.value,
+      outcome.journalEntry,
+      ...journal.value.filter((entry) => entry.id !== outcome.journalEntry.id),
     ].slice(0, JOURNAL_LIMIT)
   }
 
@@ -192,10 +205,8 @@ export const usePetStore = defineStore('pet', () => {
     error.value = null
     try {
       await resetPet()
-      pet.value = null
+      clearPetState()
       loadedOnce.value = true
-      journal.value = []
-      speech.value = ''
       return true
     } catch (cause) {
       error.value = describe(cause)
@@ -203,6 +214,17 @@ export const usePetStore = defineStore('pet', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  function clearPetState(): void {
+    pet.value = null
+    journal.value = []
+    offlineSummary.value = null
+    speech.value = ''
+  }
+
+  function dismissOfflineSummary(): void {
+    offlineSummary.value = null
   }
 
   function consumeFlash(): void {
@@ -216,6 +238,7 @@ export const usePetStore = defineStore('pet', () => {
     acting,
     error,
     journal,
+    offlineSummary,
     speech,
     levelUpFlash,
     evolvedFlash,
@@ -225,11 +248,14 @@ export const usePetStore = defineStore('pet', () => {
     serverNowMs: now,
     startClock,
     stopClock,
+    seed,
     load,
+    loadJournal,
     ensureLoaded,
     adopt,
     act,
     reset,
+    dismissOfflineSummary,
     consumeFlash,
   }
 })

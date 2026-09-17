@@ -72,6 +72,13 @@ Content-Type: application/json
 - 服务端只保存令牌的 SHA-256，明文令牌只在这里返回一次。
 - `players.last_seen_at` 在这个接口更新（不在每个请求上更新，避免拦截器里写库）。
 
+**`pet` 字段是结算过的，并且带着 `settlement` 摘要。** 打开应用时它往往就是
+「回访」的那一刻，所以客户端应当**直接使用它**，不要再紧跟着发一次 `GET /pets/me`：
+
+服务端的每条读取路径都会先做懒结算，所以第二次读的时候时间已经被第一次结算完了，
+`settlement` 会变成 `null` —— 离线变化摘要就这样被读丢了。本项目的做法是
+会话响应抵达时把宠物种进 petStore，之后只额外拉一次照护日志。
+
 响应：
 
 ```json
@@ -137,7 +144,8 @@ Authorization: Bearer <token>
   "evolutionStage": 0,
   "sleepingSince": null,
   "lastSettledAt": "2026-09-17T12:00:00Z",
-  "cooldowns": {}
+  "cooldowns": {},
+  "settlement": null
 }
 ```
 
@@ -147,6 +155,21 @@ Authorization: Bearer <token>
 - `evolutionStage`：0 幼年 / 1 成长 / 2 最终。
 - `cooldowns`：仍在冷却中的操作 → 冷却结束时刻，只包含还没结束的项。
   FEED / PLAY / CLEAN 各自 60 秒冷却，互不影响；SLEEP / WAKE 没有冷却。
+- `settlement`：**本次读取结算出来的变化摘要**（PRD 2.5），时间没有前进时为 `null`：
+
+  ```json
+  {
+    "settledHours": 12,
+    "deltas": { "satiety": -60, "mood": -48, "hygiene": -27, "energy": -48, "health": -24 },
+    "statusBefore": "NORMAL",
+    "statusAfter": "HUNGRY",
+    "wokeUp": false,
+    "sleptHours": 0
+  }
+  ```
+
+  前端用它展示「你不在时发生了什么」（PRD 4.3）。`settledHours` 已经按 12 小时封顶；
+  `deltas` 是整段时间的净变化，和操作响应里的 `deltas`（只含操作本身）不是一回事。
 
 ### 2.4 执行操作
 
@@ -171,9 +194,23 @@ Authorization: Bearer <token>
   "levelUp": false,
   "evolved": false,
   "messageKey": "FEED_OK",
-  "cooldownUntil": "2026-09-17T12:01:00Z"
+  "cooldownUntil": "2026-09-17T12:01:00Z",
+  "journalEntry": {
+    "id": 12,
+    "action": "FEED",
+    "at": "2026-09-17T12:00:00Z",
+    "deltas": { "satiety": 20, "mood": 3, "hygiene": -2, "energy": 0, "health": 0 },
+    "xpGained": 6,
+    "levelUp": false,
+    "evolved": false,
+    "messageKey": "FEED_OK"
+  }
 }
 ```
+
+`journalEntry` 是这次操作刚写进日志的那一条，前端直接拿它更新日志区，
+不用再发一次请求去拉列表。**幂等重放时返回的是当初那一条**（id 相同），
+所以重复提交不会在日志里多记一笔。
 
 **`deltas` 是"生效后的真实差值"，不是配置表里的名义值。** 属性上限 100、下限 0，
 所以饱食 80 的宠物喂食（名义 +30）`deltas.satiety` 返回 20。
@@ -216,7 +253,39 @@ Authorization: Bearer <token>
 删除该玩家的宠物和全部操作日志，**玩家记录保留**，可以立即重新领养。
 没有宠物时也返回成功（幂等）。前端必须二次确认。
 
-### 2.7 开发用时间推进（仅 dev profile）
+### 2.7 照护日志
+
+```http
+GET /api/v1/pets/me/journal?limit=20
+Authorization: Bearer <token>
+```
+
+最近的照护记录，新的在前（PRD 4.2 日志区）。
+
+- `limit` 可选，默认 20，服务端钳制在 1–50，超出范围不报错而是按边界处理。
+- 数据来自 `pet_action_logs`，所以**刷新页面、关掉浏览器之后记录都还在**。
+- 重置存档会连同日志一起删掉；宠物不存在时返回 404 `PET_NOT_FOUND`。
+
+响应 `data` 是数组：
+
+```json
+[
+  {
+    "id": 12,
+    "action": "FEED",
+    "at": "2026-09-17T12:00:00Z",
+    "deltas": { "satiety": 20, "mood": 3, "hygiene": -2, "energy": 0, "health": 0 },
+    "xpGained": 6,
+    "levelUp": false,
+    "evolved": false,
+    "messageKey": "FEED_OK"
+  }
+]
+```
+
+`messageKey` 是给前端选台词用的键，服务端不返回现成文案，由前端映射。
+
+### 2.8 开发用时间推进（仅 dev profile）
 
 ```http
 POST /api/v1/dev/advance-time

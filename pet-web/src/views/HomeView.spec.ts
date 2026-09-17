@@ -5,20 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { fetchGameConfig } from '@/api/gameConfig'
-import { fetchPet, performAction } from '@/api/pet'
+import { fetchJournal, fetchPet, performAction } from '@/api/pet'
 import HomeView from '@/views/HomeView.vue'
 
-import type { GameConfig, Pet } from '@/types/pet'
+import type { ActionOutcome, GameConfig, JournalEntry, Pet, SettlementSummary } from '@/types/pet'
 
 vi.mock('@/api/gameConfig', () => ({ fetchGameConfig: vi.fn() }))
 vi.mock('@/api/pet', () => ({
   createPet: vi.fn(),
   fetchPet: vi.fn(),
+  fetchJournal: vi.fn(),
   performAction: vi.fn(),
   resetPet: vi.fn(),
 }))
 
 const fetchPetMock = vi.mocked(fetchPet)
+const fetchJournalMock = vi.mocked(fetchJournal)
 const performActionMock = vi.mocked(performAction)
 const fetchGameConfigMock = vi.mocked(fetchGameConfig)
 
@@ -41,6 +43,47 @@ function makePet(overrides: Partial<Pet> = {}): Pet {
     sleepingSince: null,
     lastSettledAt: NOW.toISOString(),
     cooldowns: {},
+    settlement: null,
+    ...overrides,
+  }
+}
+
+function makeEntry(overrides: Partial<JournalEntry> = {}): JournalEntry {
+  return {
+    id: 1,
+    action: 'FEED',
+    at: NOW.toISOString(),
+    deltas: { satiety: 20, mood: 3, hygiene: -2, energy: 0, health: 0 },
+    xpGained: 6,
+    levelUp: false,
+    evolved: false,
+    messageKey: 'FEED_OK',
+    ...overrides,
+  }
+}
+
+function makeOutcome(overrides: Partial<ActionOutcome> = {}): ActionOutcome {
+  return {
+    pet: makePet({ satiety: 100, exp: 126 }),
+    deltas: { satiety: 20, mood: 3, hygiene: -2, energy: 0, health: 0 },
+    xpGained: 6,
+    levelUp: false,
+    evolved: false,
+    messageKey: 'FEED_OK',
+    cooldownUntil: '2026-09-17T12:01:00Z',
+    journalEntry: makeEntry(),
+    ...overrides,
+  }
+}
+
+function makeSummary(overrides: Partial<SettlementSummary> = {}): SettlementSummary {
+  return {
+    settledHours: 8,
+    deltas: { satiety: -40, mood: -32, hygiene: -18, energy: -32, health: 0 },
+    statusBefore: 'NORMAL',
+    statusAfter: 'NORMAL',
+    wokeUp: false,
+    sleptHours: 0,
     ...overrides,
   }
 }
@@ -65,7 +108,16 @@ const GAME_CONFIG: GameConfig = {
   evolution: [],
 }
 
-async function mountView(): Promise<{ wrapper: ReturnType<typeof mount>; router: Router }> {
+/**
+ * 挂载主界面并**等到 onMounted 里的接口链真的跑完**。
+ *
+ * 不能只等 `fetchPet` 被调用 —— 它在 onMounted 里是同步调用的，
+ * 一检查就通过，而此时 promise 还没落地，断言会看到"正在读取存档…"。
+ */
+async function mountView(
+  options: { waitForPet?: boolean } = {},
+): Promise<{ wrapper: ReturnType<typeof mount>; router: Router }> {
+  const waitForPet = options.waitForPet ?? true
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -79,7 +131,14 @@ async function mountView(): Promise<{ wrapper: ReturnType<typeof mount>; router:
   const wrapper = mount(HomeView, {
     global: { plugins: [createPinia(), router] },
   })
-  await vi.waitFor(() => expect(fetchPetMock).toHaveBeenCalled())
+
+  await vi.waitFor(() => {
+    if (waitForPet) {
+      expect(wrapper.find('.home-title').exists()).toBe(true)
+    } else {
+      expect(router.currentRoute.value.name).toBe('onboarding')
+    }
+  })
 
   return { wrapper, router }
 }
@@ -97,6 +156,7 @@ describe('HomeView', () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     fetchGameConfigMock.mockResolvedValue(GAME_CONFIG)
+    fetchJournalMock.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -133,22 +193,14 @@ describe('HomeView', () => {
 
   it('没有宠物时跳回领养页', async () => {
     fetchPetMock.mockRejectedValue(new ApiError('PET_NOT_FOUND', '还没有领养宠物', 404))
-    const { router } = await mountView()
+    const { router } = await mountView({ waitForPet: false })
 
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('onboarding'))
+    expect(router.currentRoute.value.name).toBe('onboarding')
   })
 
   it('点击操作按钮会调用 store 执行对应操作', async () => {
     fetchPetMock.mockResolvedValue(makePet())
-    performActionMock.mockResolvedValue({
-      pet: makePet({ satiety: 100, exp: 126 }),
-      deltas: { satiety: 20, mood: 3, hygiene: -2, energy: 0, health: 0 },
-      xpGained: 6,
-      levelUp: false,
-      evolved: false,
-      messageKey: 'FEED_OK',
-      cooldownUntil: '2026-09-17T12:01:00Z',
-    })
+    performActionMock.mockResolvedValue(makeOutcome())
 
     const { wrapper } = await mountView()
     await actionButtons(wrapper)[0]?.trigger('click')
@@ -194,21 +246,65 @@ describe('HomeView', () => {
 
   it('操作成功后气泡显示反馈短句并写入日志', async () => {
     fetchPetMock.mockResolvedValue(makePet())
-    performActionMock.mockResolvedValue({
-      pet: makePet({ exp: 126 }),
-      deltas: { satiety: 20, mood: 3, hygiene: -2, energy: 0, health: 0 },
-      xpGained: 6,
-      levelUp: false,
-      evolved: false,
-      messageKey: 'FEED_OK',
-      cooldownUntil: '2026-09-17T12:01:00Z',
-    })
+    performActionMock.mockResolvedValue(makeOutcome({ pet: makePet({ exp: 126 }) }))
 
     const { wrapper } = await mountView()
     await actionButtons(wrapper)[0]?.trigger('click')
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('吃得真香！'))
     expect(wrapper.findAll('.journal-item')).toHaveLength(1)
+  })
+
+  it('回访时优先展示「你不在时发生了什么」，关掉后消失', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ settlement: makeSummary({ settledHours: 8 }) }))
+    const { wrapper } = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('.home-offline').exists()).toBe(true))
+    expect(wrapper.text()).toContain('你不在的 8 小时里')
+    expect(wrapper.text()).toContain('饱食 -40')
+    expect(wrapper.text()).toContain('心情 -32')
+
+    await wrapper.find('.home-offline-close').trigger('click')
+    expect(wrapper.find('.home-offline').exists()).toBe(false)
+  })
+
+  it('睡觉中自己醒来时摘要会说明', async () => {
+    fetchPetMock.mockResolvedValue(
+      makePet({
+        settlement: makeSummary({
+          statusBefore: 'SLEEPING',
+          statusAfter: 'NORMAL',
+          wokeUp: true,
+          sleptHours: 3,
+        }),
+      }),
+    )
+    const { wrapper } = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('.home-offline').exists()).toBe(true))
+    expect(wrapper.text()).toContain('睡了 3 小时后自己醒了')
+  })
+
+  it('没有经过时间时不显示离线条', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ settlement: null }))
+    const { wrapper } = await mountView()
+
+    await vi.waitFor(() => expect(fetchPetMock).toHaveBeenCalled())
+    expect(wrapper.find('.home-offline').exists()).toBe(false)
+  })
+
+  it('日志区展示服务端返回的历史记录（刷新页面也还在）', async () => {
+    fetchPetMock.mockResolvedValue(makePet())
+    fetchJournalMock.mockResolvedValue([
+      makeEntry({ id: 5, action: 'PLAY', messageKey: 'PLAY_OK', xpGained: 8 }),
+      makeEntry({ id: 4, action: 'FEED' }),
+    ])
+
+    const { wrapper } = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.findAll('.journal-item')).toHaveLength(2))
+    expect(wrapper.text()).toContain('玩耍')
+    expect(wrapper.text()).toContain('+8 经验')
   })
 
   it('打开设置弹窗', async () => {

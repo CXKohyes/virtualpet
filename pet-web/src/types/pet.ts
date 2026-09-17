@@ -31,6 +31,33 @@ export interface PetAttributes {
   health: number
 }
 
+/**
+ * 一次懒结算的变化摘要（PRD 2.5）。
+ *
+ * 只在这次读取真的结算了时间时才有值，用来展示「你不在时发生了什么」。
+ */
+export interface SettlementSummary {
+  settledHours: number
+  deltas: AttributeDeltas
+  statusBefore: PetStatus
+  statusAfter: PetStatus
+  wokeUp: boolean
+  sleptHours: number
+}
+
+/** 照护日志的一条记录。数据来自服务端的操作日志，刷新页面也还在。 */
+export interface JournalEntry {
+  id: number
+  action: PetAction
+  /** UTC ISO-8601。 */
+  at: string
+  deltas: AttributeDeltas
+  xpGained: number
+  levelUp: boolean
+  evolved: boolean
+  messageKey: string
+}
+
 /** 宠物完整状态。服务端返回的是唯一事实，前端不自行推算。 */
 export interface Pet extends PetAttributes {
   id: number
@@ -45,6 +72,8 @@ export interface Pet extends PetAttributes {
   lastSettledAt: string
   /** 仍在冷却中的操作 -> 冷却结束时刻，只包含还没结束的项。 */
   cooldowns: Partial<Record<PetAction, string>>
+  /** 本次读取结算出来的变化摘要；时间没有前进时为 null。 */
+  settlement: SettlementSummary | null
 }
 
 /** 单次操作的属性变化量，是操作本身的效果，不含离线衰减。 */
@@ -58,6 +87,8 @@ export interface ActionOutcome {
   evolved: boolean
   messageKey: string
   cooldownUntil: string | null
+  /** 服务端刚写下的那条日志，前端直接拿它更新日志区，不用再拉一次列表。 */
+  journalEntry: JournalEntry
 }
 
 export interface SessionData {

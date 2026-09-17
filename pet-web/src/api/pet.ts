@@ -1,6 +1,6 @@
 import { request } from './client'
 
-import type { ActionOutcome, Pet, PetAction, Species } from '@/types/pet'
+import type { ActionOutcome, JournalEntry, Pet, PetAction, Species } from '@/types/pet'
 
 /** 领养宠物（docs/api.md 2.2）。 */
 export function createPet(species: Species, name: string): Promise<Pet> {
@@ -27,6 +27,19 @@ export function performAction(action: PetAction, clientRequestId: string): Promi
     method: 'POST',
     url: '/pets/me/actions',
     data: { action, clientRequestId },
+  })
+}
+
+/**
+ * 最近的照护记录，新的在前（docs/api.md 2.7）。
+ *
+ * 服务端会把 limit 钳制在 1–50。
+ */
+export function fetchJournal(limit = 20): Promise<JournalEntry[]> {
+  return request<JournalEntry[]>({
+    method: 'GET',
+    url: '/pets/me/journal',
+    params: { limit },
   })
 }
 

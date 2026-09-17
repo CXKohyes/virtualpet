@@ -1,7 +1,6 @@
 package com.virtualpet.player;
 
 import com.virtualpet.common.ApiResponse;
-import com.virtualpet.pet.Pet;
 import com.virtualpet.pet.PetResponse;
 import com.virtualpet.pet.PetService;
 import jakarta.validation.Valid;
@@ -35,8 +34,9 @@ public class PlayerController {
     public ApiResponse<SessionResponse> establish(@Valid @RequestBody SessionRequest request) {
         PlayerService.IssuedSession session = playerService.establish(request.deviceId().strip());
 
-        Pet pet = petService.findPet(session.playerId());
-        PetResponse petResponse = pet == null ? null : petService.toResponse(petService.load(session.playerId()));
+        PetResponse petResponse = petService.loadIfPresent(session.playerId())
+                .map(snapshot -> petService.toResponse(snapshot.pet(), snapshot.settlement()))
+                .orElse(null);
 
         return ApiResponse.ok(new SessionResponse(session.playerId(), session.token(), petResponse));
     }

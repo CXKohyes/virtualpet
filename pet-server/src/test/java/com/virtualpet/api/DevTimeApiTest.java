@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -78,6 +79,24 @@ class DevTimeApiTest {
     }
 
     @Test
+    @DisplayName("settle=false 只推进不结算，结算留给下一次读取")
+    void advanceWithoutSettlingDefersToNextRead() throws Exception {
+        String token = newSessionToken();
+        createPet(token, "CAT", "Mimi");
+
+        // 只挪游标，属性应当原封不动
+        JsonNode afterAdvance = dataOf(advanceTime(token, 8, false));
+        assertThat(afterAdvance.path("satiety").asInt()).isEqualTo(80);
+        assertThat(afterAdvance.path("settlement").isNull()).isTrue();
+
+        // 下一次读取才结算，并且带上摘要 —— 回访提示就是这么来的
+        JsonNode settled = dataOf(getPet(token));
+        assertThat(settled.path("satiety").asInt()).isEqualTo(40);
+        assertThat(settled.path("settlement").path("settledHours").asLong()).isEqualTo(8);
+        assertThat(settled.path("settlement").path("deltas").path("satiety").asInt()).isEqualTo(-40);
+    }
+
+    @Test
     @DisplayName("小时数超出范围 -> 400")
     void hoursAreValidated() throws Exception {
         String token = newSessionToken();
@@ -122,12 +141,24 @@ class DevTimeApiTest {
     }
 
     private JsonNode advanceTime(String token, int hours) throws Exception {
-        String body = objectMapper.writeValueAsString(Map.of("hours", hours));
+        return advanceTime(token, hours, true);
+    }
+
+    private JsonNode advanceTime(String token, int hours, boolean settle) throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of("hours", hours, "settle", settle));
         String response = mockMvc.perform(post("/api/v1/dev/advance-time")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .characterEncoding("UTF-8")
                         .contentType(JSON)
                         .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return objectMapper.readTree(response);
+    }
+
+    private JsonNode getPet(String token) throws Exception {
+        String response = mockMvc.perform(get("/api/v1/pets/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return objectMapper.readTree(response);

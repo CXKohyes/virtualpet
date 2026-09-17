@@ -14,6 +14,7 @@ vi.mock('@/api/gameConfig', () => ({ fetchGameConfig: vi.fn() }))
 vi.mock('@/api/pet', () => ({
   createPet: vi.fn(),
   fetchPet: vi.fn(),
+  fetchJournal: vi.fn(),
   performAction: vi.fn(),
   resetPet: vi.fn(),
 }))
@@ -80,6 +81,7 @@ const CREATED_PET: Pet = {
   sleepingSince: null,
   lastSettledAt: '2026-09-17T12:00:00Z',
   cooldowns: {},
+  settlement: null,
 }
 
 async function mountView(): Promise<{ wrapper: ReturnType<typeof mount>; router: Router }> {

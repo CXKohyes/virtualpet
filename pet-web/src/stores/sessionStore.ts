@@ -10,6 +10,7 @@ import {
   writeStorage,
 } from '@/api/client'
 import { establishSession } from '@/api/session'
+import { usePetStore } from '@/stores/petStore'
 
 import type { SessionData } from '@/types/pet'
 
@@ -56,7 +57,13 @@ export const useSessionStore = defineStore('session', () => {
       deviceId.value = stored && stored.trim() !== '' ? stored : createDeviceId()
       writeStorage(DEVICE_ID_STORAGE_KEY, deviceId.value)
 
-      apply(await establishSession(deviceId.value))
+      const session = await establishSession(deviceId.value)
+      apply(session)
+
+      // 会话响应里带回的宠物已经结算过，并且带着离线摘要（回访时用它展示
+      // 「你不在时发生了什么」）。这里直接种进 petStore，避免再读一次把它读丢。
+      usePetStore().seed(session.pet)
+
       ready.value = true
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : '建立会话失败'

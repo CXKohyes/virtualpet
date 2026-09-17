@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DEVICE_ID_STORAGE_KEY, TOKEN_STORAGE_KEY, onUnauthorized } from '@/api/client'
 import { establishSession } from '@/api/session'
+import { usePetStore } from '@/stores/petStore'
 import { useSessionStore } from '@/stores/sessionStore'
 
 vi.mock('@/api/session', () => ({ establishSession: vi.fn() }))
@@ -87,6 +88,45 @@ describe('sessionStore', () => {
     expect(window.localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull()
     // deviceId 保留，重新建会话后还是同一份存档
     expect(window.localStorage.getItem(DEVICE_ID_STORAGE_KEY)).toBeTruthy()
+  })
+
+  it('把会话带回的宠物种进 petStore，连同离线摘要', async () => {
+    const withPet = {
+      id: 1,
+      species: 'CAT' as const,
+      name: '咪咪',
+      satiety: 40,
+      mood: 48,
+      hygiene: 62,
+      energy: 48,
+      health: 76,
+      status: 'NORMAL' as const,
+      level: 3,
+      exp: 120,
+      evolutionStage: 0,
+      sleepingSince: null,
+      lastSettledAt: '2026-09-17T12:00:00Z',
+      cooldowns: {},
+      settlement: {
+        settledHours: 8,
+        deltas: { satiety: -40, mood: -32, hygiene: -18, energy: -32, health: 0 },
+        statusBefore: 'NORMAL' as const,
+        statusAfter: 'NORMAL' as const,
+        wokeUp: false,
+        sleptHours: 0,
+      },
+    }
+    establishSessionMock.mockResolvedValue({ playerId: 7, token: 'token-f', pet: withPet })
+
+    const store = useSessionStore()
+    await store.initialize()
+
+    // 会话响应就是「回访」那一刻：宠物和离线摘要都要用上，
+    // 不然再读一次 GET /pets/me 会把摘要读丢
+    const petStore = usePetStore()
+    expect(petStore.pet?.name).toBe('咪咪')
+    expect(petStore.pet?.satiety).toBe(40)
+    expect(petStore.offlineSummary?.settledHours).toBe(8)
   })
 
   it('令牌失效（401）时自动清除本地会话', async () => {

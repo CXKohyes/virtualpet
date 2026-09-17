@@ -23,4 +23,17 @@ public interface PetActionLogMapper extends BaseMapper<PetActionLog> {
             GROUP BY action
             """)
     List<ActionUsage> selectLastUsedByAction(@Param("petId") Long petId);
+
+    /**
+     * 最近的若干条操作记录，新的在前。
+     *
+     * <p>{@code limit} 由调用方钳制过范围，并且是绑定参数，不是拼接的 SQL。</p>
+     */
+    @Select("""
+            SELECT * FROM pet_action_logs
+            WHERE pet_id = #{petId}
+            ORDER BY id DESC
+            LIMIT #{limit}
+            """)
+    List<PetActionLog> selectRecent(@Param("petId") Long petId, @Param("limit") int limit);
 }

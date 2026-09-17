@@ -10,6 +10,7 @@ import java.util.Map;
  * 前端负责转换成本地时区显示。</p>
  *
  * @param cooldowns 仍在冷却中的操作 -> 冷却结束时刻，只包含还没结束的项
+ * @param settlement 这次读取结算出来的变化摘要（PRD 2.5）；时间没有前进时为 {@code null}
  */
 public record PetResponse(
         Long id,
@@ -26,5 +27,6 @@ public record PetResponse(
         int evolutionStage,
         Instant sleepingSince,
         Instant lastSettledAt,
-        Map<String, Instant> cooldowns) {
+        Map<String, Instant> cooldowns,
+        SettlementSummary settlement) {
 }

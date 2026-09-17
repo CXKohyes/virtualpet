@@ -8,7 +8,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 宠物接口（TECH_DESIGN 5.2–5.4、5.6）。
@@ -37,11 +40,23 @@ public class PetController {
         return ApiResponse.ok(petService.toResponse(pet));
     }
 
-    /** 查询宠物，返回结算后的完整状态。 */
+    /**
+     * 查询宠物，返回结算后的完整状态。
+     *
+     * <p>响应里的 {@code settlement} 是本次结算的变化摘要，前端据此展示
+     * 「你不在时发生了什么」（PRD 2.5、4.3）。</p>
+     */
     @GetMapping("/me")
     public ApiResponse<PetResponse> me() {
-        Pet pet = petService.load(playerContext.playerId());
-        return ApiResponse.ok(petService.toResponse(pet));
+        PetSnapshot snapshot = petService.load(playerContext.playerId());
+        return ApiResponse.ok(petService.toResponse(snapshot.pet(), snapshot.settlement()));
+    }
+
+    /** 最近的照护记录，新的在前（PRD 4.2）。 */
+    @GetMapping("/me/journal")
+    public ApiResponse<List<JournalEntryResponse>> journal(
+            @RequestParam(required = false) Integer limit) {
+        return ApiResponse.ok(petActionService.recentJournal(playerContext.playerId(), limit));
     }
 
     /** 执行一次操作。 */

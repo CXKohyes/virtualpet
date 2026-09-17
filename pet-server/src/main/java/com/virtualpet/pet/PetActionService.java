@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -65,6 +66,12 @@ public class PetActionService {
         this.clock = clock;
     }
 
+    /** 日志默认返回多少条。 */
+    private static final int DEFAULT_JOURNAL_LIMIT = 20;
+
+    /** 日志最多返回多少条，超出按上限处理。 */
+    private static final int MAX_JOURNAL_LIMIT = 50;
+
     /**
      * 执行一次操作。
      *
@@ -75,6 +82,37 @@ public class PetActionService {
     public ActionResponse perform(Long playerId, String rawAction, String clientRequestId) {
         PetAction action = parseAction(rawAction);
         return writer.runWithRetry(() -> execute(playerId, action, clientRequestId));
+    }
+
+    /**
+     * 最近的照护记录，新的在前（PRD 4.2 日志区）。
+     *
+     * <p>读的是 {@code pet_action_logs}，所以刷新页面、换浏览器窗口之后记录都还在。</p>
+     *
+     * @param limit 条数，超出范围会被钳制；传 {@code null} 用默认值
+     */
+    public List<JournalEntryResponse> recentJournal(Long playerId, Integer limit) {
+        Pet pet = petService.requirePet(playerId);
+        int size = limit == null
+                ? DEFAULT_JOURNAL_LIMIT
+                : Math.min(Math.max(limit, 1), MAX_JOURNAL_LIMIT);
+
+        return actionLogMapper.selectRecent(pet.getId(), size).stream()
+                .map(this::toJournalEntry)
+                .toList();
+    }
+
+    private JournalEntryResponse toJournalEntry(PetActionLog logEntry) {
+        ActionOutcome outcome = readSaved(logEntry);
+        return new JournalEntryResponse(
+                logEntry.getId(),
+                logEntry.getAction(),
+                logEntry.getCreatedAt(),
+                outcome.deltas(),
+                outcome.xpGained(),
+                outcome.levelUp(),
+                outcome.evolved(),
+                outcome.messageKey());
     }
 
     private ActionResponse execute(Long playerId, PetAction action, String clientRequestId) {
@@ -125,19 +163,19 @@ public class PetActionService {
 
         // 5. 先写操作日志，再拼响应：日志落库后 toResponse 算出的冷却里才会带上本次操作
         ActionOutcome outcome = new ActionOutcome(
-                deltasBetween(before, after),
+                AttributeDeltas.between(before, after),
                 progress.xpGained(),
                 progress.levelUp(),
                 progress.evolved(),
                 messageKey(action),
                 nextCooldownUntil(action, now));
-        saveLog(pet, action, clientRequestId, outcome, now);
+        PetActionLog logEntry = saveLog(pet, action, clientRequestId, outcome, now);
 
         log.info("宠物 {} 执行 {}，获得 {} 点经验，等级 {}", pet.getId(), action, progress.xpGained(), pet.getLevel());
-        return toResponse(outcome, pet);
+        return toResponse(outcome, pet, toJournalEntry(logEntry));
     }
 
-    private ActionResponse toResponse(ActionOutcome outcome, Pet pet) {
+    private ActionResponse toResponse(ActionOutcome outcome, Pet pet, JournalEntryResponse journalEntry) {
         return new ActionResponse(
                 petService.toResponse(pet),
                 outcome.deltas(),
@@ -145,7 +183,8 @@ public class PetActionService {
                 outcome.levelUp(),
                 outcome.evolved(),
                 outcome.messageKey(),
-                outcome.cooldownUntil());
+                outcome.cooldownUntil(),
+                journalEntry);
     }
 
     /**
@@ -187,7 +226,8 @@ public class PetActionService {
             writer.touch(pet);
             writer.updateOrConflict(pet);
         }
-        return toResponse(stored, pet);
+        // 幂等回放返回的是当初那条日志，前端不会因为重复提交而重复记一笔
+        return toResponse(stored, pet, toJournalEntry(saved));
     }
 
     private PetActionLog findLog(String clientRequestId) {
@@ -196,8 +236,8 @@ public class PetActionService {
                         .eq(PetActionLog::getClientRequestId, clientRequestId));
     }
 
-    private void saveLog(Pet pet, PetAction action, String clientRequestId,
-                         ActionOutcome outcome, Instant now) {
+    private PetActionLog saveLog(Pet pet, PetAction action, String clientRequestId,
+                                 ActionOutcome outcome, Instant now) {
         PetActionLog entry = new PetActionLog();
         entry.setPetId(pet.getId());
         entry.setAction(action.name());
@@ -205,6 +245,8 @@ public class PetActionService {
         entry.setResultJson(writeJson(outcome));
         entry.setCreatedAt(now);
         actionLogMapper.insert(entry);
+        // insert 之后实体上才有自增 id，响应里要用
+        return entry;
     }
 
     private ActionOutcome readSaved(PetActionLog saved) {
@@ -255,16 +297,6 @@ public class PetActionService {
         pet.setMood(attributes.mood());
         pet.setHygiene(attributes.hygiene());
         pet.setEnergy(attributes.energy());
-    }
-
-    /** 操作的实际变化量。属性有上下限，所以这里返回的是生效后的真实差值。 */
-    private static AttributeDeltas deltasBetween(PetAttributes before, PetAttributes after) {
-        return new AttributeDeltas(
-                after.satiety() - before.satiety(),
-                after.mood() - before.mood(),
-                after.hygiene() - before.hygiene(),
-                after.energy() - before.energy(),
-                after.health() - before.health());
     }
 
     private static String messageKey(PetAction action) {

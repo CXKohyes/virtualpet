@@ -1,20 +1,19 @@
 <script setup lang="ts">
-import { ACTION_LABELS } from '@/content/messages'
+import { ACTION_LABELS, messageForAction } from '@/content/messages'
 
-import type { JournalEntry } from '@/stores/petStore'
+import type { JournalEntry } from '@/types/pet'
 
 /**
  * 照护日志（PRD 4.2）。
  *
- * 批次 3 只记录本次打开页面之后做过的操作；跨会话的历史和离线变化摘要
- * 需要后端补一个日志查询接口，留到后续批次。
+ * 数据来自服务端的 {@code pet_action_logs}，刷新页面、换浏览器窗口之后记录都还在。
  */
 defineProps<{
   entries: JournalEntry[]
 }>()
 
-function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+function formatTime(at: string): string {
+  return new Date(at).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   })
@@ -31,7 +30,7 @@ function formatTime(timestamp: number): string {
       <li v-for="entry in entries" :key="entry.id" class="journal-item">
         <span class="journal-time">{{ formatTime(entry.at) }}</span>
         <span class="journal-action">{{ ACTION_LABELS[entry.action] ?? entry.action }}</span>
-        <span class="journal-message">{{ entry.message }}</span>
+        <span class="journal-message">{{ messageForAction(entry.messageKey) }}</span>
         <span v-if="entry.xpGained > 0" class="journal-xp">+{{ entry.xpGained }} 经验</span>
         <span v-if="entry.levelUp" class="journal-tag">升级！</span>
         <span v-if="entry.evolved" class="journal-tag journal-tag--evolve">进化！</span>
