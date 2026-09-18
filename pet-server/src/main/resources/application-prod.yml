@@ -1,0 +1,62 @@
+# 生产配置：单台云服务器 + 本机 MySQL + nginx 同源反代（TECH_DESIGN 12.3）。
+#
+# 激活方式：
+#   java -jar pet-server.jar --spring.profiles.active=prod
+#
+# **绝对不能叠加 dev。** 那个 profile 会注册 /api/v1/dev/advance-time
+# 和 /api/v1/dev/set-state，前者允许任意调用方推进宠物时间、后者可以随便
+# 铺设经验属性 —— 等于把游戏规则交给公网。
+#
+# 敏感项一律走环境变量（由 systemd 的 EnvironmentFile 提供），不写进仓库。
+
+server:
+  port: 8080
+  # 只监听回环地址。公网入口只有 nginx，后端不直接对外暴露，
+  # 这样 8080 天然免于被扫，安全组里也不用为它开口子。
+  address: 127.0.0.1
+
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/virtual_pet?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
+    username: ${PET_DB_USERNAME:pet_app}
+    # 没有默认值：没设这个变量就启动失败，好过用一个空密码连上去再报奇怪的错
+    password: ${PET_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  liquibase:
+    enabled: true
+
+app:
+  websocket:
+    # 浏览器实际访问的站点来源，逗号分隔。必须配，否则 WebSocket 握手被 403 拒掉，
+    # 而页面上只表现为「实时通知一直未连接」，看不出是白名单问题。
+    #   有域名：  https://pet.example.com
+    #   没备案走 IP：  http://47.98.x.x:8080
+    allowed-origins: ${PET_ALLOWED_ORIGINS}
+
+  rate-limit:
+    # 公网必须开。POST /api/v1/session 免鉴权且每次都会往 players 插一行，
+    # 没有节流的话被扫到就能刷爆磁盘。
+    enabled: true
+    # 采信 X-Real-IP。这一步成立靠两个前提，缺一不可：
+    #   1. nginx 配置里 proxy_set_header X-Real-IP $remote_addr —— 是**覆盖**，
+    #      客户端自带的同名头会被冲掉，伪造不了；
+    #   2. server.address 是 127.0.0.1 —— 后端没法被直连，请求一定经过 nginx。
+    # 如果哪天改了监听地址或绕过 nginx 反代，必须把这个改回 false。
+    trust-forwarded-header: true
+    session-per-minute: ${PET_RATE_LIMIT_SESSION:60}
+    general-per-minute: ${PET_RATE_LIMIT_GENERAL:300}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+logging:
+  level:
+    root: INFO
+    # 生产不开 DEBUG。请求级访问日志（RequestLoggingFilter）已经带了
+    # method/path/status/resultCode/durationMs 和 requestId，排查够用了（PRD 6.6）
+    com.virtualpet: INFO
+# 日志不落文件，走标准输出交给 systemd 的 journald：
+# 免去 /var/log 目录权限和轮转配置，查看用 journalctl -u pet-server -f

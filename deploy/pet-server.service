@@ -1,0 +1,47 @@
+# 像素宠物屋后端 —— systemd 单元
+#
+# 安装：
+#   sudo cp deploy/pet-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pet-server
+#
+# 查看日志：
+#   journalctl -u pet-server -f
+#
+# 环境变量文件 /etc/pet-server/env 里放敏感项（权限 600，属主 petapp）：
+#   PET_DB_PASSWORD=...
+#   PET_ALLOWED_ORIGINS=https://pet.example.com
+#
+# 注意 Unit 名里的连字符：systemd 里 pet-server.service 对应 pet\x2dserver.service，
+# 用 systemctl 命令操作时写 pet-server 即可。
+
+[Unit]
+Description=像素宠物屋后端（Spring Boot）
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=petapp
+Group=petapp
+WorkingDirectory=/opt/pet
+
+# 敏感配置不写进单元文件（单元文件是 644，谁都读得到）
+EnvironmentFile=/etc/pet-server/env
+
+# 内存上限按 2核4GiB 的机器定：堆 512MB + 元空间和线程栈，常驻约 700MB，
+# 给同机的 MySQL 留足余量。若选了 2GiB 的机型，把 -Xmx 降到 384m。
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/pet/pet-server.jar --spring.profiles.active=prod
+
+# Java 收到 SIGTERM 后正常退出是 143，不写这条 systemd 会当成失败并触发重启
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+
+# 基础加固。没有开 ProtectSystem=strict —— Spring Boot 会往临时目录写东西，
+# 在没验证过的情况下开严格模式容易变成"启动就死"，等跑通再按需加严。
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

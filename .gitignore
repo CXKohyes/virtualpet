@@ -38,6 +38,11 @@ failsafe-reports/
 .env.*
 !.env.example
 
+# 本机随手记的部署笔记：里面写着明文的 API token / 密码。
+# 这类文件不该放在项目目录里，吊销之后记得删。
+edgeone部署.txt
+*部署.txt
+
 # 本地数据库连接配置（示例文件必须保留：application-local.yml.example）
 application-local.yml
 application-local.yaml

@@ -27,6 +27,26 @@ mybatis-plus:
     db-config:
       id-type: auto
 
+app:
+  websocket:
+    # 允许建立 WebSocket 握手的来源白名单（PRD 6.2）。
+    # 默认只放行本机开发地址；生产必须由 application-prod.yml 覆盖成真实域名，
+    # 否则浏览器握手会被 403 拒掉，而页面上只表现为「实时通知一直未连接」。
+    allowed-origins: http://localhost:*,http://127.0.0.1:*
+
+  rate-limit:
+    # 接口限流（PRD 6.2）。公网部署后 POST /api/v1/session 免鉴权且会写库，
+    # 不限流的话被人扫到就能刷爆 players 表。
+    enabled: true
+    # 是否采信 X-Real-IP。**只有前面确实有反向代理时才能开**——
+    # 这个头客户端可以伪造，直连场景下信它等于把限流开关交给攻击者。
+    # 生产的 nginx 用覆盖方式设置它，且后端只监听回环地址，所以 prod 里开了。
+    trust-forwarded-header: false
+    # 建立会话：严格档。正常玩家每次打开页面才建一次会话。
+    session-per-minute: 60
+    # 其余业务接口：宽松档，主要拦脚本化的洪水。
+    general-per-minute: 300
+
 # 健康检查：GET /actuator/health
 management:
   endpoints:
