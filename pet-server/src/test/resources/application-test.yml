@@ -21,6 +21,17 @@ spring:
     enabled: true
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
+app:
+  rate-limit:
+    # 测试档默认关掉。各测试类共用同一个被缓存的 Spring 上下文，限流桶会跨测试
+    # 累积 —— 一个类跑几十个请求就把令牌耗光，把毫不相干的用例打成 429。
+    #
+    # 限流自己的行为不靠这个开关覆盖：
+    #   · RateLimiterTest        直接测桶算法
+    #   · RateLimitFilterTest    用 @TestPropertySource 临时打开并压低阈值，
+    #                            端到端验 429、Retry-After 和响应信封
+    enabled: false
+
 logging:
   level:
     root: WARN

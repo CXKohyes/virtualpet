@@ -7,6 +7,20 @@
 # 生产环境绝对不能激活这个 profile：它会注册 /api/v1/dev/advance-time，
 # 允许调用方随意推进宠物时间。
 
+app:
+  rate-limit:
+    # 开发档**关掉限流**。理由不是图方便：`scripts/acceptance.mjs` 一次完整运行
+    # 会从 127.0.0.1 发出 **113 个请求**，其中 **22 个是建会话**（实测数字，
+    # 见请求访问日志）。那是验收脚本该有的行为，不是攻击。
+    #
+    # 对照生产的默认阈值（建会话 60/分钟、其余 300/分钟）：跑一遍勉强过得去，
+    # 一分钟内连跑两三遍就会被打成 429 —— 而 429 看起来像业务出错，
+    # 排查起来会怀疑到游戏逻辑上去。所以这里直接关掉，不用「调大阈值」硬扛。
+    #
+    # 限流本身的行为由 RateLimitFilterTest / RateLimiterTest 用低阈值直接验，
+    # 不依赖在这个 profile 下真实触发。dev 本来也绝不允许进生产。
+    enabled: false
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

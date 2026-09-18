@@ -51,7 +51,8 @@
 | 409 | `PET_ALREADY_EXISTS` | 重复领养 |
 | 409 | `ACTION_NO_EFFECT` | 当前操作无效果（`message` 给出具体原因） |
 | 409 | `CONFLICT` | 乐观锁冲突且重试用尽 |
-| 429 | `ACTION_COOLDOWN` | 操作冷却中 |
+| 429 | `ACTION_COOLDOWN` | 操作冷却中（游戏规则，换个人来点也一样） |
+| 429 | `RATE_LIMITED` | 请求过于频繁（基础设施保护，按来源 IP 分桶） |
 | 404 | `FRIEND_CODE_NOT_FOUND` | 好友码不存在 |
 | 409 | `SELF_CHALLENGE` | 拿自己的好友码挑战自己 |
 | 409 | `OPPONENT_NO_PET` | 对方还没有领养宠物 |
@@ -59,6 +60,10 @@
 | 500 | `INTERNAL_ERROR` | 未预期的服务端错误 |
 
 鉴权先于路由：`/api/v1/**` 下即使是**不存在**的路径，没有令牌也会先返回 401。
+
+**限流先于鉴权**：`RateLimitFilter` 跑在 DispatcherServlet 之前，所以超限时
+**不带令牌也会返回 429**（而不是 401），响应里带 `Retry-After`（秒）。
+默认阈值见 `application.yml` 的 `app.rate-limit`；开发档和测试档是关掉的。
 
 ---
 

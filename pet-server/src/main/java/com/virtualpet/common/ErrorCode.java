@@ -55,6 +55,15 @@ public enum ErrorCode {
     /** 对战记录不存在，或者与当前玩家无关。 */
     BATTLE_NOT_FOUND(HttpStatus.NOT_FOUND, "没有这场对战的记录"),
 
+    /**
+     * 请求过于频繁，被限流拦下（PRD 6.2）。
+     *
+     * <p>和 {@link #ACTION_COOLDOWN} 不同：那个是<b>游戏规则</b>（宠物还没缓过来，
+     * 换个人来点也一样），这个是<b>基础设施保护</b>（同一个来源发得太密），
+     * 换一个网络出口就不受限。两者都是 429，但前端该给的提示不一样。</p>
+     */
+    RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "请求太频繁了，缓一缓再试"),
+
     /** 未预期的服务端错误。 */
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "服务器开小差了，请稍后再试");
 
