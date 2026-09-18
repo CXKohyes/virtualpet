@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
+import PetParticles from '@/components/PetParticles.vue'
 import { STATUS_LABELS } from '@/content/messages'
 import { STAGE_LABELS, spriteFor } from '@/content/petSprites'
 
+import type { ParticleBurst } from '@/content/particles'
 import type { Pet } from '@/types/pet'
 
 /**
@@ -15,6 +17,10 @@ import type { Pet } from '@/types/pet'
  *
  * 尺寸固定 128px，正好是 64 的 2 倍整数缩放：像素图一旦按非整数倍缩放，
  * 就会出现有的像素占 2 个屏幕像素、有的占 3 个的"毛边"。
+ *
+ * 操作反馈有三个层次，都从这里发出：精灵自身的 CSS 位移动画（`is-acting-*`、
+ * `is-level-up`、`is-evolving`）、`PetParticles` 的方块粒子、以及舞台之外的
+ * 音效和提示条（由 `HomeView` 负责）。
  */
 const props = defineProps<{
   pet: Pet
@@ -44,19 +50,79 @@ const stateClasses = computed(() => ({
   'is-level-up': props.flash === 'LEVEL_UP',
   'is-evolving': props.flash === 'EVOLVE',
 }))
+
+/* ---- 粒子触发（PRD 4.2 第 3 项） ----
+   粒子由这里根据**已有的 props** 推导，不新增 store 字段、也不改 HomeView：
+   `acting` / `flash` / `pet.status` 本来就已经传进来了，触发条件和动画类名
+   说的是同一件事，放在一起才不会两处走样。 */
+
+/** 有粒子反馈的照护动作。睡觉和唤醒只是状态切换，不炸粒子。 */
+const CARE_BURSTS: Readonly<Record<string, ParticleBurst>> = {
+  FEED: 'FEED',
+  PLAY: 'PLAY',
+  CLEAN: 'CLEAN',
+}
+
+const burst = ref<ParticleBurst | null>(null)
+const burstId = ref(0)
+
+/**
+ * 触发一次爆发。
+ *
+ * `burstId` 递增是重放的关键：同一个操作连做两次时 `burst` 的值没变，
+ * 只有这个序号变了，`PetParticles` 才会重挂载并把动画从头播一遍。
+ */
+function fire(next: ParticleBurst): void {
+  burst.value = next
+  burstId.value += 1
+}
+
+// 升级和进化用 flash 表达，它比 acting 晚发生，所以谁后到谁作数。
+watch(
+  () => props.flash,
+  (flash) => {
+    // flash 是可选的，没传时是 undefined，和 null 一样表示「这次没有强调动画」。
+    if (flash !== null && flash !== undefined) {
+      fire(flash)
+    }
+  },
+)
+
+watch(
+  () => props.acting,
+  (acting) => {
+    const next = acting === null ? undefined : CARE_BURSTS[acting]
+    if (next !== undefined) {
+      fire(next)
+    }
+  },
+)
+
+watch(
+  () => props.pet.status,
+  (status, before) => {
+    // 只在「刚生病」那一刻炸一次；一直病着不反复炸。
+    if (status === 'SICK' && before !== undefined && before !== 'SICK') {
+      fire('SICK')
+    }
+  },
+)
 </script>
 
 <template>
   <div class="pet-stage">
-    <img
-      class="pet-sprite"
-      :class="stateClasses"
-      :src="sprite"
-      :alt="stageAlt"
-      width="64"
-      height="64"
-      draggable="false"
-    />
+    <div class="pet-figure">
+      <img
+        class="pet-sprite"
+        :class="stateClasses"
+        :src="sprite"
+        :alt="stageAlt"
+        width="64"
+        height="64"
+        draggable="false"
+      />
+      <PetParticles :burst="burst" :burst-id="burstId" />
+    </div>
     <div class="stage-ground" aria-hidden="true" />
   </div>
 </template>
@@ -72,6 +138,15 @@ const stateClasses = computed(() => ({
   background: linear-gradient(180deg, var(--color-screen) 0%, #e8dcc0 100%);
   border: var(--border-pixel);
   box-shadow: var(--shadow-pixel);
+}
+
+/* 精灵和粒子共用的定位上下文，尺寸跟着精灵走。
+   粒子从这个盒子的中心（也就是宠物身体中心）出发，
+   所以要包一层而不是直接挂在 `.pet-stage` 上 —— 后者是整块舞台，
+   中心点在宠物下方一大截，粒子会像从地上冒出来。 */
+.pet-figure {
+  position: relative;
+  display: flex;
 }
 
 /* 64px 的图按整数倍放大。**改动尺寸时只能取 64 的整数倍**（128、192、256），
