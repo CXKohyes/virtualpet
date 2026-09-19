@@ -96,12 +96,18 @@ const HOUR = 1000 * 60 * 60
 
 // ---------------------------------------------------------------- 各场景
 
-/** 验收 1：首次打开可以选择猫、狗或龙并完成命名。 */
+/**
+ * 验收 1：首次打开可以选择任意一个物种并完成命名。
+ *
+ * 每个物种单开一个玩家（每轮固定领养 2 只），所以物种数可以超过槽位上限 3 ——
+ * 这条链路验的是"每种宠物都能领养"，不是"一个玩家能养几只"。
+ */
 async function acceptAdoption() {
   for (const [species, name] of [
     ['CAT', '咪咪'],
     ['DOG', '旺财'],
     ['DRAGON', '小蓝'],
+    ['RABBIT', '小白'],
   ]) {
     await newPlayer()
     const pet = await ok('POST', '/api/v1/pets', { species, name })
@@ -388,7 +394,11 @@ async function acceptErrors() {
 /** 验收 8：游戏配置（前端展示物种特性用）。 */
 async function acceptConfig() {
   const config = await ok('GET', '/api/v1/game/config', undefined, { auth: false })
-  checkEqual('配置返回三个物种', config.species?.length, 3)
+  checkEqual('配置返回四个物种', config.species?.length, 4)
+  check(
+    '配置里的物种含兔子（PRD 2.6 的第四个物种）',
+    config.species?.some((item) => item.code === 'RABBIT'),
+  )
   check('配置返回四种以上操作', (config.actions?.length ?? 0) >= 4)
   checkEqual('离线封顶 12 小时', config.offlineCapHours, 12)
   checkEqual('最高 10 级', config.maxLevel, 10)
