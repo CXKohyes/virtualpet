@@ -6,7 +6,7 @@
 
 ```
 浏览器
-  │  http://<域名或公网IP>:80
+  │  http://<公网IP>:8000
   ▼
 nginx  ──── /            → /opt/pet/pet-web   （前端构建产物）
   │    ──── /api/        → 127.0.0.1:8080    （Spring Boot）
@@ -18,6 +18,10 @@ nginx  ──── /            → /opt/pet/pet-web   （前端构建产物）
 **前后端同源**，所以前端一行都不用改（它用的就是相对路径），也**不需要 CORS** ——
 后端至今没有跨域配置，这套方案下也不需要加。
 
+**为什么是 8000 而不是 80**：大陆地域的 80/443 必须完成 ICP 备案才能对外服务，
+没备案的话请求会被直接拦掉，表现为**连接超时**而不是任何报错页面 —— 很容易误判成
+「防火墙没开」或「服务没起来」。所以先用高位端口把功能跑通，备案下来再切回 80/443。
+
 ---
 
 ## 0. 前置条件
@@ -26,8 +30,8 @@ nginx  ──── /            → /opt/pet/pet-web   （前端构建产物）
 | --- | --- |
 | 实例 | 2核4GiB 起。2核2GiB 要收紧 JVM 堆和 MySQL 缓冲池，见文末 |
 | 系统 | Ubuntu 22.04 或 Alibaba Cloud Linux 3（**不要预装宝塔**） |
-| 安全组 | 放行 **80**（有备案）或你选定的端口。**不要**放行 8080 和 3306 |
-| 端口 | 大陆地域用 80/443 需要 ICP 备案；没备案就用 `IP:8080` 之类的端口访问 |
+| 安全组 | 放行 **8000**（或你选定的端口）。**不要**放行 8080 和 3306 |
+| 公网 IP | 记住它，下面凡出现 `<IP>` 的地方都换成它 |
 
 > **为什么不要宝塔：** 它会自己装一套 nginx 和 MySQL 并占住 80/443、3306，
 > 和下面这些配置直接打架 —— 表现为「明明改了配置却不生效」，因为读的是另一个文件。
@@ -131,16 +135,22 @@ sudo chmod 640 /opt/pet/pet-server.jar
 ```bash
 sudo tee /etc/pet-server/env >/dev/null <<'EOF'
 PET_DB_PASSWORD=第2步设的那个密码
-PET_ALLOWED_ORIGINS=http://<你的域名或IP:端口>
+PET_ALLOWED_ORIGINS=http://<IP>:8000
 EOF
 
 sudo chown root:petapp /etc/pet-server/env
 sudo chmod 640 /etc/pet-server/env
 ```
 
-> `PET_ALLOWED_ORIGINS` 是 **WebSocket 握手的来源白名单**，必须和浏览器地址栏里的
-> 来源**逐字一致**（含 `http://` 还是 `https://`、含端口号）。
-> 配错的症状很隐蔽：页面一切正常，只有对战通知一直显示「未连接」。
+> ⚠️ **`PET_ALLOWED_ORIGINS` 必须和浏览器地址栏里的来源逐字一致，端口号不能少。**
+> 没有域名的部署就是 `http://<IP>:8000` —— 写成 `http://<IP>`（漏端口）或
+> `http://<IP>:80` 都会让 WebSocket 握手被 403 拒掉。
+>
+> 这个配错的症状特别隐蔽：**页面一切正常**，四个操作都能点、状态条都在动，
+> 只有对战页的实时通知一直显示「未连接」。不知道这条的话会去怀疑 nginx、
+> 怀疑 WebSocket 服务，其实只是白名单少了个端口号。
+>
+> 改完这个文件要 `sudo systemctl restart pet-server` 才生效（reload 不重读 env）。
 
 ---
 
@@ -171,7 +181,10 @@ sudo nginx -t          # 必须先过语法检查
 sudo systemctl reload nginx
 ```
 
-打开 `http://<域名或IP:端口>/` 应该能看到领养页。
+⚠️ `nginx -t` 是这一步的**关键动作**，不要跳过直接 reload —— 配置有语法错时
+reload 会失败但**旧配置继续生效**，于是你会以为改动没生效，实际是根本没加载。
+
+打开 `http://<IP>:8000/` 应该能看到领养页。
 
 ---
 
@@ -181,11 +194,12 @@ sudo systemctl reload nginx
 
 - [ ] 领养一只宠物，刷新页面存档还在
 - [ ] 四个操作都有反应、状态条会变
-- [ ] **进对战页，确认实时通知显示「已连接」** —— 这条验证 WebSocket 白名单和 nginx 升级头同时正确
+- [ ] **进对战页，确认实时通知显示「已连接」** —— 这条验证 `PET_ALLOWED_ORIGINS`、WebSocket 白名单和 nginx 升级头三者同时正确
 - [ ] 让另一个浏览器（或用 `scripts/acceptance.mjs`）发起一次挑战，战报能收到推送
-- [ ] 直接访问 `http://<地址>/battle` 并刷新，不出现 404（验证 SPA 兜底）
-- [ ] `curl http://<地址>/health` 返回 `{"status":"UP"}` 而不是 HTML（见下）
+- [ ] 直接访问 `http://<IP>:8000/battle` 并刷新，不出现 404（验证 SPA 兜底）
+- [ ] `curl http://<IP>:8000/health` 返回 `{"status":"UP"}` 而不是 HTML（见下）
 - [ ] **确认 dev profile 没被带上**（见下）
+- [ ] 从外网 `curl` 一下 `http://<IP>:8080/actuator/health`，应当**连不上** —— 确认后端没有直接暴露
 
 ### 关于 /health：为什么它必须单独配
 
@@ -199,7 +213,7 @@ SPA 兜底（`try_files ... /index.html`）会让**任何**没匹配到文件的
 验收时确认：
 
 ```bash
-curl -i http://<地址>/health | head -3
+curl -i http://<IP>:8000/health | head -3
 # 期望：HTTP/1.1 200 且 body 是 {"status":"UP"}
 # 如果 body 是 <!DOCTYPE html>，说明 location 顺序又错了
 ```
@@ -257,19 +271,31 @@ sudo systemctl start pet-server
 
 ---
 
-## 10. 上 HTTPS（有域名且已备案）
+## 10. 之后：换域名 + HTTPS（**备案下来再做，现在跳过**）
+
+没有域名就没法申证书（certbot 要验证域名归属），而且大陆地域的 80/443
+必须先备案。备案下来之后按下面做，改动很小：
 
 ```bash
+# 1) nginx 改回 80/443
+sudo sed -i 's/^    listen 8000;/    listen 80;/' /etc/nginx/conf.d/pet.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 2) 申证书（会自动改写 server 块并加 80→443 跳转）
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d pet.example.com
 ```
 
-**换完 HTTPS 必须同步改后端**，否则 WebSocket 会被 403 拒掉：
+**第 3 步不能漏：同步改后端的来源白名单**，否则 WebSocket 会被 403 拒掉，
+而症状还是那个隐蔽的「页面正常、只有通知未连接」：
 
 ```bash
 sudo sed -i 's|^PET_ALLOWED_ORIGINS=.*|PET_ALLOWED_ORIGINS=https://pet.example.com|' /etc/pet-server/env
 sudo systemctl restart pet-server
 ```
+
+> 端口变了、协议从 `http` 变成 `https`，**来源字符串就变了** ——
+> `PET_ALLOWED_ORIGINS` 必须跟着改，这是这套部署里最容易漏的一步。
 
 ---
 
