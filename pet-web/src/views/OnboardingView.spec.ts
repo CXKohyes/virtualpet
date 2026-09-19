@@ -179,13 +179,13 @@ describe('OnboardingView', () => {
   })
 
   it('创建失败时展示后端给的原因', async () => {
-    createPetMock.mockRejectedValue(new ApiError('PET_ALREADY_EXISTS', '已经领养过宠物了', 409))
+    createPetMock.mockRejectedValue(new ApiError('PET_SLOTS_FULL', '宠物已经满了，先送走一只再领养', 409))
 
     const { wrapper, router } = await mountView()
     await wrapper.find('.name-input').setValue('咪咪')
     await wrapper.find('button').trigger('click')
 
-    await vi.waitFor(() => expect(wrapper.text()).toContain('已经领养过宠物了'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('宠物已经满了'))
     expect(router.currentRoute.value.name).toBe('onboarding')
   })
 

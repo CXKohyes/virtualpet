@@ -91,12 +91,15 @@ D:\code\virtual pet\
 ├── CLAUDE.md
 ├── 设计方案.md
 ├── docs\
-│   ├── api.md
-│   └── balance.md
+│   ├── api.md                      # 接口契约、错误码与已知取舍
+│   └── deployment.md               # 公网部署（单机 systemd + nginx）
+├── deploy\                         # 公网部署产物
+│   ├── nginx-pet.conf
+│   ├── pet-server.service
+│   └── server-setup.sh
 ├── scripts\
-│   ├── dev.ps1
-│   ├── generate_sprites.py
-│   └── maven-settings.xml          # 可选，仅网络需要时使用
+│   ├── acceptance.mjs              # 对着真机后端跑一遍 PRD 验收项
+│   └── generate_sprites.py
 ├── pet-server\
 │   ├── pom.xml
 │   └── src\
@@ -394,7 +397,7 @@ Authorization: Bearer <token>
 | 400 | INVALID_NAME | 名字非法 |
 | 401 | UNAUTHORIZED | 令牌缺失或无效 |
 | 404 | PET_NOT_FOUND | 尚未创建宠物 |
-| 409 | PET_ALREADY_EXISTS | 重复创建宠物 |
+| 409 | PET_SLOTS_FULL | 三个槽位都占用了，领养不下 |
 | 429 | ACTION_COOLDOWN | 操作冷却中 |
 | 409 | ACTION_NO_EFFECT | 当前操作无效果 |
 
@@ -406,14 +409,31 @@ GET /api/v1/game/config
 
 返回物种、操作效果、冷却、等级阈值和进化条件。前端只缓存，不把它们写入业务判断。
 
-### 5.6 重置存档
+### 5.6 送走一只宠物
 
 ```http
-DELETE /api/v1/pets/me
+DELETE /api/v1/pets/{petId}
 Authorization: Bearer <token>
 ```
 
-删除当前玩家关联的宠物和日志，玩家记录保留，便于重新领养。前端必须二次确认。
+删除这只宠物和它的日志，玩家记录保留，便于再领养。前端必须二次确认，
+并说清送走的是哪一只。
+
+送走的如果正是当前宠物，服务端在同一个事务里把 `players.active_pet_id`
+改到剩下里槽位最小的那只，一只不剩就置空。
+
+**取代了原来的 `DELETE /api/v1/pets/me`**（那是个不存在的路由了，
+旧的 `/pets/me` 现在会因为 `me` 转不成 `Long` 而返回 400）。
+
+### 5.6a 名册与切换
+
+```http
+GET  /api/v1/pets              # 名册，按槽位升序，逐只结算
+POST /api/v1/pets/me/active    # { "petId": 2 } 切换当前宠物
+```
+
+这两条是 P2 多宠物槽加的。它们和上一条的关系：
+`/pets/me` 系列接口一律指**当前宠物**，名册负责列出全部，切换负责改「当前」是谁。
 
 ### 5.7 开发时间推进
 
@@ -450,7 +470,7 @@ Authorization: Bearer <token>
 铺设完会立刻走一遍真实的后处理（重算状态、重算等级与进化），所以规则一条都没绕过 ——
 接口换掉的只是"属性/经验是从哪来的"。
 
-### 5.9 WebSocket 预埋
+### 5.9 WebSocket
 
 ```text
 Endpoint: /ws
@@ -649,7 +669,8 @@ token_hash = SHA-256(token)
 - `ActionDock`：四个操作按钮、冷却和禁用原因。
 - `SpeechBubble`：展示当前台词。
 - `JournalPanel`：展示最近操作和离线摘要。
-- `SettingsModal`：音效开关、重新领养、版本信息。
+- `SettingsModal`：音效开关、送走宠物、版本信息。
+- `PetRoster`：名册，点一下切换当前宠物；槽位没满时带「再养一只」入口（P2）。
 
 ### 7.3 前端状态流
 
@@ -666,7 +687,10 @@ token_hash = SHA-256(token)
 
 - `/`：有宠物进入 `HomeView`，无宠物进入 `OnboardingView`。
 - `/onboarding`：强制领养流程。
-- 不实现复杂嵌套路由，MVP 只保留两个主视图和一个设置弹窗。
+- 不实现复杂嵌套路由。目前是**三个主视图**（`/` 主界面、`/onboarding` 领养、
+  `/battle` 对战）加一个设置弹窗 —— 对战页是 P1 加的，原文「只保留两个主视图」
+  在那之后就不准了。领养页有两个用途：第一次领养，以及槽位没满时的「再养一只」，
+  所以守卫不能再用「有宠物就弹回主页」来判，得看槽位满没满。
 
 ## 8. 美术与音频实现
 
@@ -748,7 +772,7 @@ token_hash = SHA-256(token)
 - 360px、768px、1440px 三档截图检查。
 - 三种宠物各完成一次领养和四类操作。
 - 使用 dev 时间推进模拟 8 小时、12 小时、24 小时。
-- 验证生病、恢复、两次进化和重新领养。
+- 验证生病、恢复、两次进化和送走宠物。
 - 检查音效开关、刷新存档、前后端重启后存档。
 
 ### 10.4 标准命令
@@ -784,7 +808,9 @@ npm --prefix pet-web run build
 3. 启动前端：`npm --prefix pet-web run dev`。
 4. 打开 Vite 地址，通过代理访问 `/api`。
 
-`scripts/dev.ps1` 后续负责同时启动前后端，并先设置 Java 17 环境变量。
+> **`scripts/dev.ps1` 至今不存在** —— 本文从批次 0 起就在承诺它，但那是个空头支票。
+> 它对应 `PRD.md` P0 的「本机一键启动脚本」，仍然欠着。
+> 在那之前，按 `README.md` 的「本机启动方式」手工起两个进程。
 
 ### 11.3 配置项
 
@@ -798,14 +824,29 @@ spring:
     enabled: true
 
 app:
-  game:
-    offline-cap-hours: 12
-    pace-multiplier: 1
-  token:
-    ttl-days: 365
+  websocket:
+    # WebSocket 握手的来源白名单，逗号分隔。生产由 PET_ALLOWED_ORIGINS 注入。
+    allowed-origins: http://localhost:*,http://127.0.0.1:*
+  rate-limit:
+    enabled: true
+    # 是否采信 X-Real-IP。只有「nginx 覆盖式设置该头」且「后端只监听回环」同时成立时才可打开
+    trust-forwarded-header: false
+    session-per-minute: 60
+    general-per-minute: 300
 ```
 
-`app.game.pace-multiplier` 只用于时间和测试调优，生产默认必须为 1。
+生产档（`application-prod.yml`）另外用环境变量注入 `PET_ALLOWED_ORIGINS`、
+`PET_RATE_LIMIT_SESSION`、`PET_RATE_LIMIT_GENERAL`，并把
+`trust-forwarded-header` 打开。清单见 `docs/deployment.md`。
+
+> **本节曾经列过 `app.game.offline-cap-hours`、`app.game.pace-multiplier`
+> 和 `app.token.ttl-days` 三项 —— 它们从来没有在代码里存在过**，
+> 直到多宠物槽这一批才被清掉。同时期的真实配置（`app.websocket.*`、
+> `app.rate-limit.*`）反倒一条都没写。**文档里写的配置项要照着代码核一遍再写**，
+> 否则它比没有更糟：维护者会去改一个不存在的键，然后困惑于为什么没生效。
+>
+> 游戏数值目前是 `GameRules` 里的 Java 常量，不做成配置项 ——
+> `GameRules` 自己的注释里写着「可配置化留到真正需要时再做」，这里如实记录。
 
 ## 12. 部署与演进
 
@@ -840,8 +881,9 @@ app:
   而改动只需换掉一条唯一键——存量数据里 `player_id` 本来就唯一，全部落进 0 号槽，
   新约束天然成立。
 - 懒结算，不做每分钟定时衰减。
-- REST 为 MVP 主链路。
-- WebSocket 仅预埋。
+- REST 为主链路；**WebSocket 只做通知，不参与状态结算、操作和进化**
+  （原写作「WebSocket 仅预埋」，P1 的异步对战已经把它用起来了，
+  那份表述在 2026-09 之前就已经不成立。约束本身没变，变的只是它不再是空转的）。
 - 不使用 Redis。
 - 不使用未验证的 `pet-engine`。
 - 不使用运行时 LLM。

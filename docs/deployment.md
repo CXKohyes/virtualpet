@@ -75,7 +75,7 @@ FLUSH PRIVILEGES;
 > ⚠️ **第一次部署必须重点验证这一条。** 项目此前只在 **MySQL 5.7** 上跑过，
 > `001-init.sql` 里那段关于 `TIMESTAMP` 默认值的踩坑注释就是为 5.7 写的。
 > 理论上 8.0 也能过（每个 `TIMESTAMP NOT NULL` 列都显式写了 `DEFAULT`），
-> 但这属于「没验证过就不算数」。启动后先看日志里 Liquibase 是否 `Run: 8` 无报错。
+> 但这属于「没验证过就不算数」。启动后先看日志里 Liquibase 是否 `Run: 16` 无报错。
 > 万一 8.0 建表失败，退路是改装 MySQL 5.7，数据库结构不用改。
 
 ---
@@ -165,7 +165,7 @@ sudo systemctl enable --now pet-server
 journalctl -u pet-server -f
 ```
 
-期望看到 `Started VirtualPetApplication` 和 Liquibase 的 `Run: 8`。
+期望看到 `Started VirtualPetApplication` 和 Liquibase 的 `Run: 16`。
 
 ```bash
 curl -s http://127.0.0.1:8080/actuator/health   # => {"status":"UP"}
@@ -268,6 +268,37 @@ sudo systemctl start pet-server
 
 前端更新：重新 `scp -r` 到 `/opt/pet/pet-web`，`sudo systemctl reload nginx` 即可
 （`index.html` 已配 `no-cache`，发版后用户不会拿到旧壳子）。
+
+### 带数据库迁移的更新（**先备份**）
+
+Liquibase 在启动时自动跑迁移，所以「换 jar 重启」就等于「改生产库结构」。
+**发布前必须先备份**，而且**尽量在低峰做** —— 迁移期间服务是不可用的：
+
+```bash
+# 1) 备份。--single-transaction 不锁表；--routines 把存储过程也带上
+sudo mysqldump --single-transaction --routines --triggers virtual_pet \
+  > /root/virtual_pet-$(date +%F-%H%M).sql
+sudo ls -lh /root/virtual_pet-*.sql   # 确认文件不是空的
+
+# 2) 再走上面的换 jar 流程
+```
+
+启动后**先看日志里的迁移摘要**再放开流量：
+
+```bash
+journalctl -u pet-server -n 80 | grep -A 6 "UPDATE SUMMARY"
+# 期望：Run: 16 / Previously run: 0 / 没有 ERROR
+```
+
+万一迁移失败，且失败在中途（MySQL 的 DDL 自动提交，没有「整个迁移回滚」这回事），
+**不要反复重启** —— Liquibase 会把已经成功的那几条记下来，反复重启会在剩下的
+changeset 上打转。先看是哪一个 changeset 挂了，必要时从备份恢复再排查。
+
+> 多宠物槽那一批（2026-09）就是这样一次结构变更：它给 `pets` 加了 `slot`、
+> 给 `players` 加了 `active_pet_id`，还把 `pets` 上的唯一键从 `(player_id)` 换成了
+> `(player_id, slot)`。换唯一键在 MySQL 上会被外键挡住（`ERROR 1553`），
+> 所以那批用的是「摘外键 → 删唯一键 → 加回外键」三步。本地 MySQL 5.7 上验证过，
+> **线上 MySQL 8.0 的首次执行仍需在发布时确认**。
 
 ---
 
@@ -378,8 +409,14 @@ journalctl -u pet-server | grep "限流命中"
 
 - **没有监控和告警** —— 只有 `/actuator/health` 一个端点
 - **单实例** —— 内存 broker，重启会断掉所有 WebSocket 连接（前端会自动重连）
-- **数据库没有备份策略**
-- **没有账号体系** —— 存档绑在浏览器 `deviceId` 上，清了浏览器数据就找不回（PRD 2.1 的既定范围）
+- **数据库没有备份策略** —— 第 9 节写的是"发布前手工备份一次"，那是流程不是策略：
+  没有定时任务、没有保留周期、没有异地副本，也**没有验证过备份能不能恢复**
+- **没有 HTTPS/WSS** —— 卡在 ICP 备案。`PRD.md:297` 要求公网部署必须 HTTPS，
+  所以这是**既定偏差**而不是遗漏：现在线上跑的是明文 HTTP，令牌在链路上是可读的。
+  备案下来之后按第 10 节切，改动很小
+- **没有账号体系** —— 存档绑在浏览器 `deviceId` 上，清了浏览器数据就找不回
+  （PRD 2.1 的既定范围）。曾评估过做账号，因为 `PRD.md:336` 不收集邮箱手机号、
+  也就没有密码找回通道，做出来会是个半成品，最终搁置
 
 ### 2核2GiB 机型的额外调整
 

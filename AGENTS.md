@@ -73,8 +73,9 @@ D:\code\virtual pet\
 ├── TECH_DESIGN.md
 ├── README.md
 ├── CLAUDE.md
-├── docs\
-├── scripts\
+├── docs\              api.md、deployment.md
+├── deploy\            公网部署产物（nginx 配置、systemd 单元、服务器初始化脚本）
+├── scripts\           acceptance.mjs、generate_sprites.py
 ├── pet-server\
 └── pet-web\
 ```
