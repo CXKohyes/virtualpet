@@ -54,7 +54,15 @@ BOTTOM_SHIFT = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO_ROOT / "pet-web" / "src" / "assets" / "pets"
 
-SPECIES = ("cat", "dog", "dragon")
+SPECIES = ("cat", "dog", "dragon", "rabbit")
+"""物种顺序 = 渲染顺序 = 共享随机数的消耗顺序。
+
+**新物种只能追加到末尾，不能插在中间。** ``main()`` 里只有一个
+``random.Random(SEED)``，按这个元组的顺序依次喂给每个 ``render()``；
+阶段 2 的星点会用掉它。插在中间的话，它后面所有物种的星点落点全部改变 ——
+也就是说"加了个物种"会顺手把已入库的旧精灵图改掉，而且 diff 里看不出来是为什么。
+追加在末尾则前面物种消耗的仍是同一段序列，旧图逐字节不变。
+"""
 
 STAGE_SCALES = (0.68, 0.84, 1.0)
 """阶段 0 幼年 / 1 成长 / 2 最终。体型差异直接画进图里，界面不再二次缩放。"""
@@ -94,6 +102,13 @@ PALETTE: dict[str, str] = {
     "dragon_light": "#86bceb",
     "dragon_base": "#4a90d9",
     "dragon_deep": "#2f6dab",
+    # 兔子：灰紫。
+    # 不能取白或米 —— belly(#fdf6e3) 和 highlight(#ffffff) 已经占了那个区间，
+    # 狗当年就栽在这上面（见上）。灰紫和狗的茶褐、belly 的米黄都不撞，
+    # 和龙的天空蓝也拉得开：那个是饱和蓝，这个是低彩度的紫灰。
+    "rabbit_light": "#cdc6da",
+    "rabbit_base": "#a49bb8",
+    "rabbit_deep": "#6f6884",
     # 配饰
     "scarf": "#d9534f",
     "scarf_dark": "#a83b38",
@@ -341,7 +356,40 @@ def draw_dragon(p: Painter, shade: str, shadow: str) -> None:
         p.box(13, y, 18, y, COLOR["accent_dark"])
 
 
-DRAW_BODY = {"cat": draw_cat, "dog": draw_dog, "dragon": draw_dragon}
+# ---- 兔子 -----------------------------------------------------------------
+
+
+def draw_rabbit(p: Painter, shade: str, shadow: str) -> None:
+    draw_torso(p, "rabbit", shade, shadow)
+    base = tone("rabbit", shade)
+    dark = tone("rabbit", shadow)
+
+    draw_head(p, "rabbit", shade)
+
+    # 长耳：又高又窄，一直立到画布上缘。
+    # 猫的尖耳是 6 像素宽、6 像素高，兔子是 4 像素宽、9 像素高 ——
+    # 靠「高瘦」而不是「宽大」拉开剪影。宽度再收就成两根线了，
+    # 再放宽又会变成猫耳朵的翻版。
+    p.poly([(10, 9), (13, 9), (11, 0)], dark)
+    p.poly([(18, 9), (21, 9), (20, 0)], dark)
+    # 内耳一路画到接近耳尖。只画根部的话，长耳朵会读成两根柱子。
+    p.poly([(11, 8), (12, 8), (11, 2)], COLOR["inner_ear"])
+    p.poly([(19, 8), (20, 8), (20, 2)], COLOR["inner_ear"])
+
+    # 小口鼻：一块浅色坐在鼻子周围。
+    # 不加这一块的话，兔子就是「猫脸换个颜色」—— 两者骨架本来就一样，
+    # 剪影之外必须再给脸部一个差异点。尺寸取在猫（无）和狗（横贯半张脸）之间。
+    p.box(14, 13, 17, 15, COLOR["belly"])
+    draw_face(p, nose_y=14)
+
+    # 短尾绒球：一小团圆球贴在臀侧。
+    # 猫的尾巴是一路甩到 y=14 的长弧，狗的是往外翘的短棒，
+    # 兔子用一团不伸出去的球 —— 三种尾巴一眼就能分开。
+    p.box(23, 22, 25, 24, base)
+    p.dot(24, 21, tone("rabbit", "light"))
+
+
+DRAW_BODY = {"cat": draw_cat, "dog": draw_dog, "dragon": draw_dragon, "rabbit": draw_rabbit}
 
 
 # ---------------------------------------------------------------- 配饰
@@ -364,7 +412,7 @@ def draw_accessory(p: Painter, species: str, stage: int) -> None:
         # 龙用第三只角当冠
         p.poly([(13, 8), (16, 2), (19, 8)], COLOR["accent"])
     else:
-        # 猫狗戴小王冠，位置卡在两只耳朵中间
+        # 猫、狗、兔子戴小王冠，位置卡在两只耳朵中间
         p.box(13, 5, 18, 6, COLOR["accent"])
         p.box(13, 6, 18, 6, COLOR["accent_dark"])
         for x in (13, 15, 17):

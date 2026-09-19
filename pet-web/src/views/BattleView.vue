@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import BattleTimeline from '@/components/BattleTimeline.vue'
 import PixelButton from '@/components/PixelButton.vue'
 import { useBattleNotifications } from '@/composables/useBattleNotifications'
-import { SPECIES_NAMES } from '@/content/battleText'
+import { SPECIES_NAMES } from '@/content/speciesText'
 import { useBattleStore } from '@/stores/battleStore'
 
 import type { BattleSide } from '@/types/battle'

@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import PetParticles from '@/components/PetParticles.vue'
 import { STATUS_LABELS } from '@/content/messages'
 import { STAGE_LABELS, spriteFor } from '@/content/petSprites'
+import { SPECIES_NAMES } from '@/content/speciesText'
 
 import type { ParticleBurst } from '@/content/particles'
 import type { Pet } from '@/types/pet'
@@ -11,8 +12,8 @@ import type { Pet } from '@/types/pet'
 /**
  * 宠物舞台（PRD 4.2 第 3 项）。
  *
- * 精灵图由 `scripts/generate_sprites.py` 程序化生成，9 张 64×64 的 PNG，
- * 覆盖三个物种 × 三个进化阶段。这里只负责挑图、缩放和播动画，
+ * 精灵图由 `scripts/generate_sprites.py` 程序化生成，每个物种 3 张 64×64 的 PNG，
+ * 覆盖全部进化阶段。这里只负责挑图、缩放和播动画，
  * **不含任何游戏规则** —— 显示哪个形态完全由服务端给的 evolutionStage 决定。
  *
  * 尺寸固定 128px，正好是 64 的 2 倍整数缩放：像素图一旦按非整数倍缩放，
@@ -30,9 +31,7 @@ const props = defineProps<{
   flash?: 'LEVEL_UP' | 'EVOLVE' | null
 }>()
 
-const speciesLabel = computed(
-  () => ({ CAT: '猫', DOG: '狗', DRAGON: '像素龙' })[props.pet.species],
-)
+const speciesLabel = computed(() => SPECIES_NAMES[props.pet.species])
 
 const sprite = computed(() => spriteFor(props.pet.species, props.pet.evolutionStage))
 

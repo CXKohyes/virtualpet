@@ -4,10 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { PET_SPRITES, STAGE_LABELS, spriteFor } from '@/content/petSprites'
-
-import type { Species } from '@/types/pet'
-
-const SPECIES: Species[] = ['CAT', 'DOG', 'DRAGON']
+import { SPECIES } from '@/types/pet'
 
 const SPRITE_DIR = join(process.cwd(), 'src', 'assets', 'pets')
 
@@ -22,12 +19,21 @@ function pngSize(path: string): { width: number; height: number } {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
 }
 
+/**
+ * 物种列表来自 `types/pet.ts` 的常量，**不在这里再抄一份字面量**。
+ *
+ * 抄一份的话，加新物种时这些用例会照常通过，只是悄悄漏测新物种 ——
+ * 那比直接失败更糟。「精灵表覆盖了全部物种」这条另有 TypeScript 兜底：
+ * `PET_SPRITES` 的类型是 `Record<Species, …>`，漏一个物种编译就过不去。
+ */
+const STAGE_COUNT = 3
+
 describe('精灵图索引', () => {
   it('每个物种三个阶段的地址都不一样', () => {
     const urls = SPECIES.flatMap((species) => [...PET_SPRITES[species]])
 
-    expect(urls).toHaveLength(9)
-    expect(new Set(urls).size).toBe(9)
+    expect(urls).toHaveLength(SPECIES.length * STAGE_COUNT)
+    expect(new Set(urls).size).toBe(SPECIES.length * STAGE_COUNT)
     expect(urls.every((url) => url.length > 0)).toBe(true)
   })
 
@@ -42,15 +48,15 @@ describe('精灵图索引', () => {
   })
 
   it('三个阶段都有中文名', () => {
-    expect(STAGE_LABELS).toHaveLength(3)
+    expect(STAGE_LABELS).toHaveLength(STAGE_COUNT)
     expect(STAGE_LABELS[0]).toBe('幼年')
   })
 })
 
 describe('生成出来的精灵图文件', () => {
-  it('九个文件都在，且都是 64×64 的 PNG（TECH_DESIGN 8.1）', () => {
+  it('每个物种的每个阶段文件都在，且都是 64×64 的 PNG（TECH_DESIGN 8.1）', () => {
     for (const species of SPECIES) {
-      for (let stage = 0; stage < 3; stage += 1) {
+      for (let stage = 0; stage < STAGE_COUNT; stage += 1) {
         const file = join(SPRITE_DIR, `${species.toLowerCase()}-stage${stage}.png`)
         const { width, height } = pngSize(file)
 
@@ -63,11 +69,15 @@ describe('生成出来的精灵图文件', () => {
     }
   })
 
-  it('联系表也生成了，用来肉眼核对一致性', () => {
+  it('目录里没有多余的图，联系表也在（用来肉眼核对一致性）', () => {
     const entries = readdirSync(SPRITE_DIR)
 
     expect(entries).toContain('contact-sheet.png')
-    // 九张精灵 + 一张联系表，没有多余的图
-    expect(entries.filter((name) => name.endsWith('.png'))).toHaveLength(10)
+    // 物种 × 阶段 张精灵 + 一张联系表。
+    // 这条同时兜住另一件事：`generate_sprites.py` 的 SPECIES 和
+    // `types/pet.ts` 的 SPECIES 必须一一对应，多一张少一张都会在这里炸。
+    expect(entries.filter((name) => name.endsWith('.png'))).toHaveLength(
+      SPECIES.length * STAGE_COUNT + 1,
+    )
   })
 })

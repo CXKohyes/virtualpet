@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import { OUTCOME_LABELS, SPECIES_NAMES } from '@/content/battleText'
+import { OUTCOME_LABELS } from '@/content/battleText'
+import { SPECIES_NAMES } from '@/content/speciesText'
 
 import type { Battle, BattleEvent } from '@/types/battle'
 

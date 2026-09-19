@@ -5,7 +5,7 @@
  * 衰减、经验、等级和进化的判定全部在服务端，前端不复制。
  */
 
-export const SPECIES = ['CAT', 'DOG', 'DRAGON'] as const
+export const SPECIES = ['CAT', 'DOG', 'DRAGON', 'RABBIT'] as const
 export type Species = (typeof SPECIES)[number]
 
 export const PET_STATUSES = [

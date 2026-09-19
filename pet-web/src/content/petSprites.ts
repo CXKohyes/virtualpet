@@ -7,6 +7,9 @@ import dogStage2 from '@/assets/pets/dog-stage2.png'
 import dragonStage0 from '@/assets/pets/dragon-stage0.png'
 import dragonStage1 from '@/assets/pets/dragon-stage1.png'
 import dragonStage2 from '@/assets/pets/dragon-stage2.png'
+import rabbitStage0 from '@/assets/pets/rabbit-stage0.png'
+import rabbitStage1 from '@/assets/pets/rabbit-stage1.png'
+import rabbitStage2 from '@/assets/pets/rabbit-stage2.png'
 
 import type { Species } from '@/types/pet'
 
@@ -21,6 +24,7 @@ export const PET_SPRITES: Record<Species, readonly string[]> = {
   CAT: [catStage0, catStage1, catStage2],
   DOG: [dogStage0, dogStage1, dogStage2],
   DRAGON: [dragonStage0, dragonStage1, dragonStage2],
+  RABBIT: [rabbitStage0, rabbitStage1, rabbitStage2],
 }
 
 /** 取某个物种某个阶段的精灵地址。阶段越界时退回幼年形态。 */

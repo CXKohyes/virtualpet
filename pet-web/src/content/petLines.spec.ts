@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { PET_SCENE_LINES, PET_STATUS_LINES, createSpeechDirector } from '@/content/petLines'
+import { SPECIES } from '@/types/pet'
 
 import type { SpeechScene } from '@/content/petLines'
-import type { PetStatus, Species } from '@/types/pet'
-
-const SPECIES: Species[] = ['CAT', 'DOG', 'DRAGON']
+import type { PetStatus } from '@/types/pet'
 
 const STATUSES: PetStatus[] = ['NORMAL', 'HUNGRY', 'DIRTY', 'TIRED', 'SAD', 'SICK', 'SLEEPING']
 
@@ -66,7 +65,7 @@ describe('台词库', () => {
     }
   })
 
-  it('三个物种在同一个桶里的说法互不相同', () => {
+  it('每个物种在同一个桶里的说法互不相同', () => {
     for (const status of STATUSES) {
       const all = SPECIES.flatMap((species) => [...PET_STATUS_LINES[species][status]])
       expect(new Set(all).size, status).toBe(all.length)

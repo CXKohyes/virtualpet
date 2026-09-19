@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { fetchGameConfig } from '@/api/gameConfig'
 import PixelButton from '@/components/PixelButton.vue'
 import { spriteFor } from '@/content/petSprites'
+import { SPECIES_NAMES } from '@/content/speciesText'
 import { usePetStore } from '@/stores/petStore'
 
 import type { GameConfigSpecies, Species } from '@/types/pet'
@@ -12,24 +13,23 @@ import type { GameConfigSpecies, Species } from '@/types/pet'
 /**
  * 领养页（PRD 2.2、4.2）。
  *
- * 三只候选宠物的特性标签来自 `GET /game/config`，不是写死的字符串 ——
+ * 候选宠物的特性标签来自 `GET /game/config`，不是写死的字符串 ——
  * 数值改了前端自动跟着变，不会出现文档和界面不一致。
+ *
+ * 展示顺序由这里的 `SPECIES_ORDER` 决定，不是服务端返回的顺序：
+ * 服务端的顺序来自 Java 枚举，那是**存储和兼容**的顺序，
+ * 和"先给玩家看哪只"是两回事。加物种时两边都要改。
  */
 const router = useRouter()
 const petStore = usePetStore()
 
-const SPECIES_ORDER: Species[] = ['CAT', 'DOG', 'DRAGON']
-
-const SPECIES_NAMES: Record<Species, string> = {
-  CAT: '猫',
-  DOG: '狗',
-  DRAGON: '像素龙',
-}
+const SPECIES_ORDER: Species[] = ['CAT', 'DOG', 'DRAGON', 'RABBIT']
 
 const SPECIES_INTROS: Record<Species, string> = {
   CAT: '灵巧又爱玩，陪它玩的时候心情涨得特别快，也没那么容易弄脏。',
   DOG: '均衡又亲人，照顾得好，健康恢复得比谁都快。',
   DRAGON: '贪吃又强壮，吃饱了特别有精神，精力掉得慢。',
+  RABBIT: '最好动也最耐脏，玩一次心情涨不少，清洁掉得比谁都慢。',
 }
 
 const NAME_MAX_LENGTH = 8
@@ -230,9 +230,15 @@ async function submit(): Promise<void> {
   border: none;
 }
 
+/* 桌面端一行放几只由容器宽度算，不写死。
+   `repeat(3, 1fr)` 是对着三个物种调的，加到四个就成了 3+1 的孤儿行。
+   下限 160px 是按容器实际可用宽度反推的：容器上限 720px 减去左右内边距约 684px，
+   一行放四个需要 4×下限 + 3×8px 间距 ≤ 684，所以下限最高只能取 165px。
+   取 160 留一点余量。**调大这个下限会让第四只掉到第二行**，
+   改完一定要在 768/1440 两档各看一眼。 */
 @media (min-width: 768px) {
   .species-fieldset {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
 }
 

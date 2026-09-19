@@ -7,6 +7,7 @@ import { ApiError } from '@/api/client'
 import { fetchGameConfig } from '@/api/gameConfig'
 import { createPet } from '@/api/pet'
 import OnboardingView from '@/views/OnboardingView.vue'
+import { SPECIES } from '@/types/pet'
 
 import type { GameConfig, Pet } from '@/types/pet'
 
@@ -58,6 +59,17 @@ const GAME_CONFIG: GameConfig = {
         feedSatietyBonus: 1.15,
         hygieneDecayScale: 1,
         energyDecayScale: 0.75,
+        healthRecoveryBonus: 0,
+      },
+    },
+    {
+      code: 'RABBIT',
+      modifier: {
+        playMoodBonus: 1.15,
+        careGainBonus: 1,
+        feedSatietyBonus: 1,
+        hygieneDecayScale: 0.7,
+        energyDecayScale: 1,
         healthRecoveryBonus: 0,
       },
     },
@@ -115,14 +127,17 @@ describe('OnboardingView', () => {
     fetchGameConfigMock.mockResolvedValue(GAME_CONFIG)
   })
 
-  it('展示三只候选宠物', async () => {
+  it('展示全部候选宠物', async () => {
     const { wrapper } = await mountView()
 
     const cards = wrapper.findAll('.species-card')
-    expect(cards).toHaveLength(3)
+    // 从 SPECIES 派生：写死 3 的话，加物种时这条会失败 —— 那还算好的；
+    // 更糟的是它可能被顺手改成 4，然后永远停在 4 上不跟着长。
+    expect(cards).toHaveLength(SPECIES.length)
     expect(wrapper.text()).toContain('猫')
     expect(wrapper.text()).toContain('狗')
     expect(wrapper.text()).toContain('像素龙')
+    expect(wrapper.text()).toContain('兔子')
   })
 
   it('特性标签来自游戏配置，不是写死的文案', async () => {
@@ -137,6 +152,9 @@ describe('OnboardingView', () => {
     // 龙：喂食饱食 +15%、精力衰减 -25%
     expect(wrapper.text()).toContain('喂食饱食 +15%')
     expect(wrapper.text()).toContain('精力衰减 -25%')
+    // 兔子：玩耍心情 +15%、清洁衰减 -30%
+    expect(wrapper.text()).toContain('玩耍心情 +15%')
+    expect(wrapper.text()).toContain('清洁衰减 -30%')
   })
 
   it('游戏配置拿不到时也能正常渲染，只是不显示特性标签', async () => {
@@ -144,7 +162,7 @@ describe('OnboardingView', () => {
 
     const { wrapper } = await mountView()
 
-    expect(wrapper.findAll('.species-card')).toHaveLength(3)
+    expect(wrapper.findAll('.species-card')).toHaveLength(SPECIES.length)
     expect(wrapper.findAll('.species-trait')).toHaveLength(0)
   })
 
@@ -193,7 +211,12 @@ describe('OnboardingView', () => {
     createPetMock.mockResolvedValue({ ...CREATED_PET, species: 'DRAGON', name: '小焰' })
 
     const { wrapper } = await mountView()
-    await wrapper.findAll('.species-radio')[2]?.setValue()
+    // 按 value 找，不按下标 —— 下标是位置耦合的，往 SPECIES_ORDER 里插一个
+    // 物种就会让这条测试去点另一只，而且照样"通过"
+    const dragon = wrapper
+      .findAll('.species-radio')
+      .find((radio) => (radio.element as HTMLInputElement).value === 'DRAGON')
+    await dragon?.setValue()
     await wrapper.find('.name-input').setValue('小焰')
     await wrapper.find('button').trigger('click')
 
