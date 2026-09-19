@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { fetchGameConfig } from '@/api/gameConfig'
-import { fetchJournal, fetchPets, fetchPet, performAction } from '@/api/pet'
-import { FLASH_DURATION_MS } from '@/content/messages'
+import { activatePet, fetchJournal, fetchPets, fetchPet, performAction, releasePet } from '@/api/pet'
+import { FLASH_DURATION_MS, STATUS_LABELS } from '@/content/messages'
 import { spriteFor } from '@/content/petSprites'
 import HomeView from '@/views/HomeView.vue'
 
@@ -27,6 +27,8 @@ const fetchPetMock = vi.mocked(fetchPet)
 const fetchJournalMock = vi.mocked(fetchJournal)
 const performActionMock = vi.mocked(performAction)
 const fetchPetsMock = vi.mocked(fetchPets)
+const activatePetMock = vi.mocked(activatePet)
+const releasePetMock = vi.mocked(releasePet)
 const fetchGameConfigMock = vi.mocked(fetchGameConfig)
 
 const NOW = new Date('2026-09-17T12:00:00Z')
@@ -158,6 +160,29 @@ function actionButtons(wrapper: ReturnType<typeof mount>) {
 }
 
 /** 页头里按文字找按钮。按钮会随功能增加而变多，按下标取迟早会点错。 */
+/**
+ * 走完「设置 → 送走某只 → 二次确认」。
+ *
+ * 按文字找按钮，不用 `button:not(.modal-close)` 这种位置选择器 ——
+ * 弹窗里第一个非关闭按钮是音效开关，按位置点会点错目标，
+ * 而且症状是"什么都没发生"，很难看出是选择器的问题。
+ */
+async function releaseCurrentPet(
+  wrapper: ReturnType<typeof mount>,
+  name: string,
+): Promise<void> {
+  await headerButton(wrapper, '设置').trigger('click')
+  const open = wrapper
+    .findAll('[role="dialog"] button')
+    .find((button) => button.text().includes(`送走${name}`))
+  await open?.trigger('click')
+  const confirm = wrapper
+    .findAll('[role="dialog"] button')
+    .find((button) => button.text().includes('确认送走'))
+  await confirm?.trigger('click')
+  await vi.waitFor(() => expect(releasePetMock).toHaveBeenCalled())
+}
+
 function headerButton(wrapper: ReturnType<typeof mount>, label: string) {
   const button = wrapper
     .findAll('.home-header-right button')
@@ -339,7 +364,109 @@ describe('HomeView', () => {
     await headerButton(wrapper, '设置').trigger('click')
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('重新领养')
+    // 原来是「重新领养」。多宠物之后那个说法不成立了：这里做的是送走当前
+    // 那一只，送完可能还有别的，所以文案必须点名是哪一只。
+    expect(wrapper.text()).toContain('送走一只')
+    expect(wrapper.text()).toContain('送走咪咪')
+  })
+
+  it('设置弹窗里送走当前宠物，还有别的时留在主页', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ id: 1, name: '咪咪' }))
+    fetchPetsMock.mockResolvedValue([
+      makePet({ id: 2, slot: 1, name: '旺财', active: true }),
+    ])
+    releasePetMock.mockResolvedValue(undefined)
+
+    const { wrapper, router } = await mountView()
+    await releaseCurrentPet(wrapper, '咪咪')
+
+    expect(releasePetMock).toHaveBeenCalledWith(1)
+    // 服务端在名册里标出了新的当前宠物，前端跟着它走，不自己挑
+    expect(router.currentRoute.value.name).toBe('home')
+  })
+
+  it('设置弹窗送走最后一只后回领养页', async () => {
+    fetchPetMock.mockResolvedValue(makePet({ id: 1, name: '咪咪' }))
+    releasePetMock.mockResolvedValue(undefined)
+    fetchPetsMock.mockResolvedValue([])
+
+    const { wrapper, router } = await mountView()
+    await releaseCurrentPet(wrapper, '咪咪')
+
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('onboarding'))
+  })
+
+  describe('名册', () => {
+    it('列出全部宠物，只有当前那只标着「当前」', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ id: 2, slot: 1, name: '旺财' }))
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0, name: '咪咪', active: false }),
+        makePet({ id: 2, slot: 1, name: '旺财', active: true }),
+      ])
+
+      const { wrapper } = await mountView()
+
+      const cards = wrapper.findAll('.roster-card')
+      expect(cards).toHaveLength(3) // 两只 + 「再养一只」
+      expect(cards[0].text()).toContain('咪咪')
+      expect(cards[1].text()).toContain('旺财')
+      expect(cards[1].text()).toContain('当前')
+      expect(cards[0].text()).not.toContain('当前')
+    })
+
+    it('点另一只就切换过去', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ id: 2, slot: 1, name: '旺财' }))
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0, name: '咪咪', active: false }),
+        makePet({ id: 2, slot: 1, name: '旺财', active: true }),
+      ])
+      activatePetMock.mockResolvedValue(makePet({ id: 1, slot: 0, name: '咪咪' }))
+
+      const { wrapper } = await mountView()
+      await wrapper.findAll('.roster-card')[0].trigger('click')
+
+      expect(activatePetMock).toHaveBeenCalledWith(1)
+    })
+
+    it('槽位没满时给「再养一只」入口，点了去领养页', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      fetchPetsMock.mockResolvedValue([makePet({ active: true })])
+
+      const { wrapper, router } = await mountView()
+      const add = wrapper.findAll('.roster-card').find((card) => card.text().includes('再养一只'))
+      await add?.trigger('click')
+
+      await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('onboarding'))
+    })
+
+    it('槽位满了就不显示「再养一只」', async () => {
+      fetchPetMock.mockResolvedValue(makePet())
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0, active: false }),
+        makePet({ id: 2, slot: 1, active: false }),
+        makePet({ id: 3, slot: 2, active: true }),
+      ])
+
+      const { wrapper } = await mountView()
+
+      expect(wrapper.findAll('.roster-card')).toHaveLength(3)
+      expect(wrapper.text()).not.toContain('再养一只')
+    })
+
+    it('状态不正常的宠物在名册上被标出来', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ id: 1, slot: 0, name: '咪咪', status: 'HUNGRY' }))
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0, name: '咪咪', active: true, status: 'HUNGRY', satiety: 12 }),
+      ])
+
+      const { wrapper } = await mountView()
+
+      const card = wrapper.findAll('.roster-card')[0]
+      expect(card.classes()).toContain('is-alert')
+      expect(card.text()).toContain(STATUS_LABELS.HUNGRY)
+      // 最缺的那一项也报出来，三只都正常时这项还能分出谁更接近出问题
+      expect(card.text()).toContain('饱食 12')
+    })
   })
 
   it('页头有对战入口，点了会跳到对战页', async () => {

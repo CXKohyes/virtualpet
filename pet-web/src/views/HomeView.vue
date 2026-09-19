@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { fetchGameConfig } from '@/api/gameConfig'
 import ActionDock from '@/components/ActionDock.vue'
 import JournalPanel from '@/components/JournalPanel.vue'
+import PetRoster from '@/components/PetRoster.vue'
 import PetStage from '@/components/PetStage.vue'
 import PixelButton from '@/components/PixelButton.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
@@ -29,7 +30,7 @@ const uiStore = useUiStore()
 
 /** 各操作的使用条件文字，来自游戏配置，只用于按钮悬停提示。 */
 const requirements = ref<Partial<Record<PetAction, string>>>({})
-const resetting = ref(false)
+const releasing = ref(false)
 
 const pet = computed(() => petStore.pet)
 
@@ -130,10 +131,25 @@ async function onAction(action: PetAction): Promise<void> {
   await petStore.act(action)
 }
 
-async function onReset(): Promise<void> {
-  resetting.value = true
+/**
+ * 切换到名册里的另一只（PRD 2.1）。
+ *
+ * 切换会带回目标那只的结算摘要，所以"切过去"本身就是一次回访 ——
+ * store 里已经把它接上了，这里不用再做别的。
+ */
+async function onSelectPet(petId: number): Promise<void> {
+  await petStore.switchTo(petId)
+}
+
+/** 「再养一只」：去领养页。领养页的守卫只在槽位真满时才会拦。 */
+async function onAddPet(): Promise<void> {
+  await router.push({ name: 'onboarding' })
+}
+
+async function onRelease(): Promise<void> {
+  releasing.value = true
   const done = await petStore.releaseActive()
-  resetting.value = false
+  releasing.value = false
   if (!done) {
     return
   }
@@ -169,6 +185,20 @@ function dismissFlash(): void {
           <PixelButton hint="打开设置" @press="uiStore.openSettings()">设置</PixelButton>
         </div>
       </header>
+
+      <!--
+        名册放在最上面：非活跃宠物照常衰减，所以「谁快不行了」必须是第一眼
+        就能看到的信息，而不是要点进去才知道（PRD 2.1）。
+      -->
+      <div class="home-roster">
+        <PetRoster
+          :pets="petStore.roster"
+          :max-slots="petStore.maxSlots"
+          :busy="petStore.loading"
+          @select="onSelectPet"
+          @add="onAddPet"
+        />
+      </div>
 
       <p v-if="petStore.error" class="home-alert" role="alert">{{ petStore.error }}</p>
 
@@ -233,10 +263,12 @@ function dismissFlash(): void {
       <SettingsModal
         v-if="uiStore.settingsOpen"
         :sound-muted="uiStore.soundMuted"
-        :resetting="resetting"
+        :releasing="releasing"
+        :pet-name="pet.name"
+        :remaining="petStore.roster.length"
         @close="uiStore.closeSettings()"
         @toggle-sound="uiStore.toggleSound()"
-        @reset="onReset"
+        @release="onRelease"
       />
     </template>
 
@@ -260,6 +292,10 @@ function dismissFlash(): void {
   justify-content: space-between;
   margin-bottom: var(--space-md);
   color: var(--color-cream);
+}
+
+.home-roster {
+  margin-bottom: var(--space-md);
 }
 
 .home-title {

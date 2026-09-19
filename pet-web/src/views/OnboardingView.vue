@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { fetchGameConfig } from '@/api/gameConfig'
@@ -104,6 +104,19 @@ function validate(): string | null {
 
 const localError = ref<string | null>(null)
 
+/**
+ * 已经有宠物了 —— 这一页的用途从「第一次领养」变成「再养一只」。
+ *
+ * 判据用 `pet` 而不是名册长度：名册拉失败时长度是 0，但玩家其实有宠物，
+ * 那样会把返回入口藏掉，进去就出不来了。当前宠物来自会话响应，更可靠。
+ */
+const adoptingAnother = computed(() => petStore.pet !== null)
+
+/** 已经有宠物时给一条退路，不然这一页进去就出不来了。 */
+async function goBack(): Promise<void> {
+  await router.push({ name: 'home' })
+}
+
 async function submit(): Promise<void> {
   localError.value = validate()
   if (localError.value !== null) {
@@ -120,8 +133,16 @@ async function submit(): Promise<void> {
 
 <template>
   <main class="onboarding">
-    <h1 class="onboarding-title">选择你的伙伴</h1>
-    <p class="onboarding-subtitle">挑一只，给它起个名字，然后开始照顾它。</p>
+    <h1 class="onboarding-title">{{ adoptingAnother ? '再养一只' : '选择你的伙伴' }}</h1>
+    <!--
+      把代价说在前面：非活跃宠物照常衰减，新养的这只不会让别的停下来。
+      这句提示是刻意的，不是客套 —— 不说清楚的话，玩家养满三只之后
+      回来发现全趴窝了，会觉得被骗。
+    -->
+    <p v-if="adoptingAnother" class="onboarding-subtitle">
+      新伙伴有自己的一套状态。注意：其它宠物不会因此暂停，一样需要照看。
+    </p>
+    <p v-else class="onboarding-subtitle">挑一只，给它起个名字，然后开始照顾它。</p>
 
     <fieldset class="species-fieldset">
       <legend class="visually-hidden">候选宠物</legend>
@@ -166,9 +187,12 @@ async function submit(): Promise<void> {
       {{ localError ?? petStore.error }}
     </p>
 
-    <PixelButton :pending="submitting || petStore.loading" @press="submit">
-      {{ submitting ? '正在领养…' : '就是它了' }}
-    </PixelButton>
+    <div class="onboarding-actions">
+      <PixelButton :pending="submitting || petStore.loading" @press="submit">
+        {{ submitting ? '正在领养…' : '就是它了' }}
+      </PixelButton>
+      <PixelButton v-if="adoptingAnother" hint="回到主页" @press="goBack">先不养了</PixelButton>
+    </div>
   </main>
 </template>
 
@@ -307,6 +331,13 @@ async function submit(): Promise<void> {
   color: var(--color-coral);
   font-size: 0.875rem;
   font-weight: 700;
+}
+
+.onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
 }
 
 .visually-hidden {
