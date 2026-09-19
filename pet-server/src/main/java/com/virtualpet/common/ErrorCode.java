@@ -31,8 +31,15 @@ public enum ErrorCode {
     /** 接口不存在。 */
     NOT_FOUND(HttpStatus.NOT_FOUND, "接口不存在"),
 
-    /** 重复创建宠物。 */
-    PET_ALREADY_EXISTS(HttpStatus.CONFLICT, "已经领养过宠物了"),
+    /**
+     * 宠物槽位已满，领养不下（PRD 2.2，多宠物槽）。
+     *
+     * <p>取代了原先的 {@code PET_ALREADY_EXISTS}（「已经领养过宠物了」）。
+     * 单宠物槽时代「重复领养」和「槽位已满」是同一件事，多宠物槽之后只剩后者：
+     * 三个槽位都占用时才会走到这里。旧错误码没有保留 —— 留着它就是一个
+     * 永远不会返回的码，文档和排查都会被它误导。</p>
+     */
+    PET_SLOTS_FULL(HttpStatus.CONFLICT, "宠物已经满了，先送走一只再领养"),
 
     /** 操作冷却中。 */
     ACTION_COOLDOWN(HttpStatus.TOO_MANY_REQUESTS, "它还在缓一缓，稍等一下"),

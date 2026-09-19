@@ -132,6 +132,19 @@ public final class GameRules {
     public static final int PET_NAME_MIN_LENGTH = 1;
     public static final int PET_NAME_MAX_LENGTH = 8;
 
+    // ---------------------------------------------------------- 宠物槽位（PRD 2.1，P2）
+
+    /**
+     * 玩家最多能养几只。
+     *
+     * <p>取 3 是对着猫、狗、龙三个物种定的：收集感完整，又不用为了选谁而取舍。
+     * 上限在应用层判定，数据库那侧只保证 {@code (player_id, slot)} 唯一 ——
+     * 也就是说槽位号必须落在 {@code 0 .. MAX_PET_SLOTS-1} 内，这条由
+     * {@code PetService} 挑槽时保证，数据库管不了。领养时取的是**最小空闲槽**，
+     * 不是「当前数量 + 1」，否则送走中间某只之后那个槽位就永远空着了。</p>
+     */
+    public static final int MAX_PET_SLOTS = 3;
+
     // ---------------------------------------------------------- 进化（PRD 2.7）
 
     /** 成长形态：至少 4 级。 */

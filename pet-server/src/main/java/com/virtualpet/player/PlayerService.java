@@ -124,6 +124,33 @@ public class PlayerService {
     }
 
     /**
+     * 设置玩家的当前宠物（PRD 2.1，多宠物槽）。传 {@code null} 表示一只都没有。
+     *
+     * <p><b>这里必须用 {@code LambdaUpdateWrapper} 而不是 {@code updateById}。</b>
+     * MyBatis-Plus 默认的 {@code NOT_NULL} 策略会把 null 字段从 UPDATE 语句里剔掉，
+     * 于是「送走最后一只宠物、把 {@code active_pet_id} 置空」这一步会<b>静默失效</b>：
+     * 接口看着正常，玩家行上却留着指向已删除宠物的 ID。</p>
+     *
+     * <p>{@code pets.sleepingSince} 当年踩的就是这个坑，那里改用了
+     * {@code updateStrategy = ALWAYS}；代价是任何局部更新都会连带覆盖那一列。
+     * 这里不开那个口子，改用显式 {@code set} 的写法 —— 赋值和置空走同一条路，
+     * 不存在「只有置空会失效」这种半对的状态。{@code PetServiceTest} 里有一条
+     * <b>直接查库</b>的回归测试钉着它：只断言响应体是发现不了这类问题的。</p>
+     */
+    @Transactional
+    public void setActivePet(Long playerId, Long petId) {
+        playerMapper.update(null, Wrappers.lambdaUpdate(Player.class)
+                .eq(Player::getId, playerId)
+                .set(Player::getActivePetId, petId));
+    }
+
+    /** 玩家当前的宠物 ID，没有宠物时为 {@code null}。 */
+    public Long activePetId(Long playerId) {
+        Player player = playerMapper.selectById(playerId);
+        return player == null ? null : player.getActivePetId();
+    }
+
+    /**
      * 会话结果。
      *
      * @param playerId 玩家 ID

@@ -150,15 +150,19 @@ class PetApiIntegrationTest {
     }
 
     @Test
-    @DisplayName("重复领养 -> 409 PET_ALREADY_EXISTS，不覆盖原存档")
-    void duplicateAdoptionConflicts() throws Exception {
+    @DisplayName("槽位满了再领养 -> 409 PET_SLOTS_FULL，已有宠物不受影响")
+    void adoptionIsRejectedWhenSlotsAreFull() throws Exception {
         Session session = newSession();
         createPet(session, "CAT", "Mimi");
+        createPet(session, "DOG", "Wangcai");
+        createPet(session, "DRAGON", "Xiaoyan");
 
-        assertThat(codeOf(createPetRaw(session, "DOG", "Wangcai", 409))).isEqualTo("PET_ALREADY_EXISTS");
-        // 原宠物没被换掉
+        // 这条原来叫 duplicateAdoptionConflicts，断言的是「第二次领养就 409」。
+        // 多宠物槽之后重复领养是正常操作，冲突只在槽位真的满了（第四只）时发生。
+        assertThat(codeOf(createPetRaw(session, "CAT", "Duoyu", 409))).isEqualTo("PET_SLOTS_FULL");
+        // 原有三只没被换掉：当前宠物仍是最后领养的那只
         assertThat(dataOf(getJson("/api/v1/pets/me", session.token(), 200)).path("species").asText())
-                .isEqualTo("CAT");
+                .isEqualTo("DRAGON");
     }
 
     @Test
