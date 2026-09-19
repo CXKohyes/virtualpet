@@ -111,8 +111,13 @@ async function acceptAdoption() {
     checkEqual(`${species} 初始健康 100`, pet.health, 100)
     check(`${species} 四项核心属性初始 80`, [pet.satiety, pet.mood, pet.hygiene, pet.energy].every((v) => v === 80))
 
-    // 重复领养必须被拦住，不能覆盖存档
-    checkEqual(`重复领养 ${species} 返回 409`, await fails('POST', '/api/v1/pets', { species, name }), 'PET_ALREADY_EXISTS')
+    // 原来这里断言的是「第二次领养必须被 409 拦住」，那是单宠物时代的规则。
+    // 多宠物槽之后重复领养是正常操作，不变的是**不能覆盖**已有那只。
+    const second = await ok('POST', '/api/v1/pets', { species, name: `${name}二号` })
+    checkEqual(`再领养一只 ${species} 占用 1 号槽`, second.slot, 1)
+    const roster = await ok('GET', '/api/v1/pets')
+    checkEqual(`再领养没有覆盖原存档`, roster.length, 2)
+    checkEqual(`原存档仍在 0 号槽且名字没变`, roster.find((item) => item.slot === 0).name, name)
 
     // 非法名字
     await newPlayer()
@@ -291,24 +296,73 @@ async function acceptEvolution() {
   checkEqual('经验给再多也不超过 10 级', (await ok('POST', '/api/v1/dev/set-state', { exp: 9999 })).level, 10)
 }
 
-/** 验收 7：重新领养二次确认（服务端侧）和存档重置。 */
-async function acceptReset() {
+/** 验收 7：送走宠物（原「存档重置」）。 */
+async function acceptRelease() {
   await newPlayer()
-  await ok('POST', '/api/v1/pets', { species: 'CAT', name: '咪咪' })
+  const pet = await ok('POST', '/api/v1/pets', { species: 'CAT', name: '咪咪' })
   await ok('POST', '/api/v1/pets/me/actions', { action: 'FEED', clientRequestId: randomUUID() })
 
   const before = await ok('GET', '/api/v1/pets/me/journal')
-  check('重置前有日志', before.length > 0)
+  check('送走前有日志', before.length > 0)
 
-  await ok('DELETE', '/api/v1/pets/me')
-  checkEqual('重置后不再有宠物', await fails('GET', '/api/v1/pets/me'), 'PET_NOT_FOUND')
-  checkEqual('重置后日志一并清空', await fails('GET', '/api/v1/pets/me/journal'), 'PET_NOT_FOUND')
+  // 路由从 DELETE /pets/me 改成按 ID：多宠物之下「me」有歧义
+  await ok('DELETE', `/api/v1/pets/${pet.id}`)
+  checkEqual('送走后不再有宠物', await fails('GET', '/api/v1/pets/me'), 'PET_NOT_FOUND')
+  checkEqual('送走后日志一并清空', await fails('GET', '/api/v1/pets/me/journal'), 'PET_NOT_FOUND')
 
-  // 重置是幂等的，而且可以立刻重新领养
-  await ok('DELETE', '/api/v1/pets/me')
+  // 重复送走同一只不是幂等的：对象已经没了就该说没了，
+  // 客户端也能据此知道自己的名册是旧的
+  checkEqual('重复送走返回 404', await fails('DELETE', `/api/v1/pets/${pet.id}`), 'PET_NOT_FOUND')
+
   const again = await ok('POST', '/api/v1/pets', { species: 'DOG', name: '旺财' })
-  checkEqual('重置后可以立刻重新领养', again.name, '旺财')
+  checkEqual('送走后可以立刻重新领养', again.name, '旺财')
   checkEqual('重新领养回到幼年形态', again.evolutionStage, 0)
+  checkEqual('重新领养占用 0 号槽', again.slot, 0)
+}
+
+/** P2：多宠物槽（PRD 2.1）。 */
+async function acceptMultiPet() {
+  await newPlayer()
+  const first = await ok('POST', '/api/v1/pets', { species: 'CAT', name: '甲' })
+  const second = await ok('POST', '/api/v1/pets', { species: 'DOG', name: '乙' })
+
+  checkEqual('第一只占 0 号槽', first.slot, 0)
+  checkEqual('第二只占 1 号槽', second.slot, 1)
+  checkEqual('领养后新来的成为当前宠物', second.active, true)
+
+  const roster = await ok('GET', '/api/v1/pets')
+  checkEqual('名册返回两只', roster.length, 2)
+  checkEqual('名册按槽位升序', roster.map((p) => p.slot).join(','), '0,1')
+  checkEqual('名册里只有一只是当前宠物', roster.filter((p) => p.active).length, 1)
+  checkEqual('名册标出的当前宠物正确', roster.find((p) => p.active).id, second.id)
+  check('名册里的宠物都带状态', roster.every((p) => typeof p.status === 'string' && p.status.length > 0))
+
+  const switched = await ok('POST', '/api/v1/pets/me/active', { petId: first.id })
+  checkEqual('切换返回目标那只', switched.id, first.id)
+  checkEqual('切换后 /pets/me 跟着变', (await ok('GET', '/api/v1/pets/me')).id, first.id)
+
+  await ok('DELETE', `/api/v1/pets/${first.id}`)
+  checkEqual('送走当前宠物后自动落到剩下那只', (await ok('GET', '/api/v1/pets/me')).id, second.id)
+
+  const third = await ok('POST', '/api/v1/pets', { species: 'DRAGON', name: '丙' })
+  checkEqual('空出来的 0 号槽被重新用上', third.slot, 0)
+
+  await ok('POST', '/api/v1/pets', { species: 'CAT', name: '丁' })
+  checkEqual('槽位满了返回 409', await fails('POST', '/api/v1/pets', { species: 'CAT', name: '戊' }),
+    'PET_SLOTS_FULL')
+
+  // 拿别人的宠物 ID 来切换，和拿一个不存在的 ID 回报同一个错 ——
+  // 能区分就等于给了一个探测别人存档是否存在的接口。
+  //
+  // 顺序要紧：**先**让「别人」领一只，**再**换成另一个玩家去切换它。
+  // 反过来写的话那只宠物属于新玩家自己，切换成功是正确行为，
+  // 这条断言就成了空转（第一次就是这么写错的，验收脚本把它抓出来了）。
+  await newPlayer()
+  const strangers = await ok('POST', '/api/v1/pets', { species: 'DOG', name: '别人的' })
+
+  await newPlayer()
+  checkEqual('切换别人的宠物返回 404', await fails('POST', '/api/v1/pets/me/active', { petId: strangers.id }),
+    'PET_NOT_FOUND')
 }
 
 /** 验收 8：主要错误提示。 */
@@ -338,6 +392,7 @@ async function acceptConfig() {
   check('配置返回四种以上操作', (config.actions?.length ?? 0) >= 4)
   checkEqual('离线封顶 12 小时', config.offlineCapHours, 12)
   checkEqual('最高 10 级', config.maxLevel, 10)
+  checkEqual('配置返回槽位上限 3', config.maxSlots, 3)
   check('配置带进化条件', Array.isArray(config.evolution) && config.evolution.length > 0)
 }
 
@@ -422,10 +477,11 @@ async function main() {
     ['4/5. 离线结算与 12 小时封顶', acceptOfflineDecay],
     ['5. 生病与恢复', acceptSickness],
     ['6. 成长与最终进化', acceptEvolution],
-    ['7. 存档重置', acceptReset],
+    ['7. 送走宠物', acceptRelease],
     ['8. 错误提示', acceptErrors],
     ['8. 游戏配置', acceptConfig],
     ['P1. 异步对战', acceptBattle],
+    ['P2. 多宠物槽', acceptMultiPet],
   ]
 
   for (const [title, run] of scenarios) {

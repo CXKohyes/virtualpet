@@ -7,6 +7,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -58,6 +59,24 @@ public class GlobalExceptionHandler {
         log.debug("接口不存在: {}", exception.getMessage());
         return ResponseEntity.status(ErrorCode.NOT_FOUND.httpStatus())
                 .body(ApiResponse.error(ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND.message()));
+    }
+
+    /**
+     * 路径或查询参数的类型转不过去。
+     *
+     * <p>典型场景：{@code DELETE /api/v1/pets/me} 里的 {@code "me"} 往 {@code Long}
+     * 上转。加了 {@code /pets/{petId}} 这类路由之后，这条路径随时会被走到 ——
+     * 客户端把 URL 写错或用了旧版本的地址都会撞上。</p>
+     *
+     * <p>不单独拦住的话它会落到下面的兜底处理器变成 <b>500</b>：客户端写错了 URL，
+     * 服务端却报「服务器开小差了」，排查方向会被整个带偏。
+     * 这和 {@link #handleNoResource} 要单独处理是同一类问题。</p>
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException exception) {
+        log.debug("参数类型不匹配: {} = {}", exception.getName(), exception.getValue());
+        return ResponseEntity.status(ErrorCode.INVALID_REQUEST.httpStatus())
+                .body(ApiResponse.error(ErrorCode.INVALID_REQUEST, ErrorCode.INVALID_REQUEST.message()));
     }
 
     @ExceptionHandler(Exception.class)

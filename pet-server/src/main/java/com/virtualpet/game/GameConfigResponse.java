@@ -6,11 +6,13 @@ import java.util.List;
  * 游戏配置（TECH_DESIGN 5.5）。
  *
  * <p>前端只缓存这些数据用于展示，<b>不得据此自己计算衰减、经验或进化</b>；
- * 所有判定以服务端为准。</p>
+ * 所有判定以服务端为准。{@code maxSlots} 也一样：前端拿它决定要不要显示
+ * 「再养一只」，但领养能不能成功仍然由服务端说了算。</p>
  */
 public record GameConfigResponse(
         int offlineCapHours,
         int maxLevel,
+        int maxSlots,
         List<Integer> expThresholds,
         List<SpeciesConfig> species,
         List<ActionConfig> actions,

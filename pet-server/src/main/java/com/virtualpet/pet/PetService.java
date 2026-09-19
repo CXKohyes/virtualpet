@@ -249,21 +249,6 @@ public class PetService {
         log.info("玩家 {} 送走了宠物 {}", playerId, pet.getId());
     }
 
-    /**
-     * 送走当前宠物，等价于对当前宠物调 {@link #release}。
-     *
-     * <p>保留它是因为 {@code DELETE /pets/me} 这条路由还在用；接口层改成按 ID 送走之后
-     * 它就没有调用方了。</p>
-     */
-    @Transactional
-    public void reset(Long playerId) {
-        Pet pet = findPet(playerId);
-        if (pet == null) {
-            return;
-        }
-        release(playerId, pet.getId());
-    }
-
     // ------------------------------------------------------------ 读取与结算
 
     /**

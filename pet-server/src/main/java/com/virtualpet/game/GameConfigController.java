@@ -21,6 +21,7 @@ public class GameConfigController {
         GameConfigResponse response = new GameConfigResponse(
                 GameRules.OFFLINE_CAP_HOURS,
                 GameRules.MAX_LEVEL,
+                GameRules.MAX_PET_SLOTS,
                 GameRules.expThresholds(),
                 Arrays.stream(Species.values()).map(GameConfigResponse.SpeciesConfig::from).toList(),
                 Arrays.stream(PetAction.values()).map(GameConfigResponse.ActionConfig::from).toList(),

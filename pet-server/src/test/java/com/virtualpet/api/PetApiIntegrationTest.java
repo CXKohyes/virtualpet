@@ -2,6 +2,7 @@ package com.virtualpet.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.virtualpet.game.GameRules;
 import com.virtualpet.pet.Pet;
 import com.virtualpet.pet.PetMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -571,18 +572,17 @@ class PetApiIntegrationTest {
     }
 
     @Test
-    @DisplayName("日志接口同样需要令牌，且重置存档后清空")
+    @DisplayName("日志接口同样需要令牌，且送走宠物后清空")
     void journalFollowsResetAndAuth() throws Exception {
         Session session = newSession();
 
         mockMvc.perform(get("/api/v1/pets/me/journal")).andExpect(status().isUnauthorized());
 
-        createPet(session, "CAT", "Mimi");
+        JsonNode pet = dataOf(createPet(session, "CAT", "Mimi"));
         act(session, "FEED", "reset-journal", 200);
         assertThat(dataOf(getJson("/api/v1/pets/me/journal", session.token(), 200)).size()).isEqualTo(1);
 
-        mockMvc.perform(delete("/api/v1/pets/me").header(HttpHeaders.AUTHORIZATION, bearer(session)))
-                .andExpect(status().isOk());
+        release(session, pet.path("id").asLong());
 
         // 宠物没了，日志也一起删了
         assertThat(codeOf(getJson("/api/v1/pets/me/journal", session.token(), 404)))
@@ -606,18 +606,17 @@ class PetApiIntegrationTest {
     }
 
     @Test
-    @DisplayName("重置存档：宠物和日志都删掉，可以重新领养")
-    void resetDeletesPetAndLogs() throws Exception {
+    @DisplayName("送走宠物：宠物和日志都删掉，可以重新领养")
+    void releaseDeletesPetAndLogs() throws Exception {
         Session session = newSession();
-        createPet(session, "CAT", "Mimi");
+        JsonNode pet = dataOf(createPet(session, "CAT", "Mimi"));
         act(session, "FEED", "req-1", 200);
 
-        mockMvc.perform(delete("/api/v1/pets/me").header(HttpHeaders.AUTHORIZATION, bearer(session)))
-                .andExpect(status().isOk());
+        release(session, pet.path("id").asLong());
 
         assertThat(codeOf(getJson("/api/v1/pets/me", session.token(), 404))).isEqualTo("PET_NOT_FOUND");
 
-        // 重置后可以重新领养，而且是一张全新的存档
+        // 送走后可以重新领养，而且是一张全新的存档
         JsonNode fresh = dataOf(createPet(session, "DOG", "Wangcai"));
         assertThat(fresh.path("species").asText()).isEqualTo("DOG");
         assertThat(fresh.path("exp").asInt()).isZero();
@@ -625,11 +624,88 @@ class PetApiIntegrationTest {
     }
 
     @Test
-    @DisplayName("重置不存在的宠物也是成功（幂等）")
-    void resetIsIdempotent() throws Exception {
+    @DisplayName("重复送走同一只返回 404，不是静默成功")
+    void releasingTwiceIsNotFound() throws Exception {
         Session session = newSession();
-        mockMvc.perform(delete("/api/v1/pets/me").header(HttpHeaders.AUTHORIZATION, bearer(session)))
-                .andExpect(status().isOk());
+        JsonNode pet = dataOf(createPet(session, "CAT", "Mimi"));
+        long petId = pet.path("id").asLong();
+
+        release(session, petId);
+        // 原来这里是「幂等返回 200」。单宠物时代「重置」没有对象，现在
+        // 「送走哪一只」是有明确对象的，对象已经没了就该说没了 ——
+        // 客户端也能据此知道自己的名册是旧的。
+        assertThat(codeOf(releaseRaw(session, petId, 404))).isEqualTo("PET_NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("退役的 DELETE /pets/me 返回 400 而不是 500")
+    void retiredResetRouteIsNotAServerError() throws Exception {
+        Session session = newSession();
+        createPet(session, "CAT", "Mimi");
+
+        // "me" 往 Long 上转失败。没有专门的处理器时这会落到兜底分支变成 500，
+        // 客户端把 URL 写错、服务端却报「服务器开小差了」，排查方向会被带偏。
+        var response = mockMvc.perform(delete("/api/v1/pets/me")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(session)))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(objectMapper.readTree(response).path("code").asText()).isEqualTo("INVALID_REQUEST");
+    }
+
+    // ================================================================ 多宠物槽
+
+    @Test
+    @DisplayName("名册返回全部宠物，按槽位升序，标出当前那只")
+    void rosterListsAllPets() throws Exception {
+        Session session = newSession();
+        JsonNode first = dataOf(createPet(session, "CAT", "甲"));
+        JsonNode second = dataOf(createPet(session, "DOG", "乙"));
+
+        JsonNode roster = dataOf(getJson("/api/v1/pets", session.token(), 200));
+
+        assertThat(roster).hasSize(2);
+        assertThat(roster.get(0).path("slot").asInt()).isZero();
+        assertThat(roster.get(1).path("slot").asInt()).isEqualTo(1);
+        assertThat(roster.get(0).path("id").asLong()).isEqualTo(first.path("id").asLong());
+        // 只有一只是当前宠物，且是最后领养的那只
+        assertThat(roster.get(0).path("active").asBoolean()).isFalse();
+        assertThat(roster.get(1).path("active").asBoolean()).isTrue();
+        assertThat(roster.get(1).path("id").asLong()).isEqualTo(second.path("id").asLong());
+    }
+
+    @Test
+    @DisplayName("切换当前宠物后，/pets/me 跟着变")
+    void activatingSwitchesWhatMeReturns() throws Exception {
+        Session session = newSession();
+        JsonNode first = dataOf(createPet(session, "CAT", "甲"));
+        createPet(session, "DOG", "乙");
+
+        JsonNode switched = dataOf(activateRaw(session, first.path("id").asLong(), 200));
+
+        assertThat(switched.path("id").asLong()).isEqualTo(first.path("id").asLong());
+        assertThat(switched.path("active").asBoolean()).isTrue();
+        assertThat(dataOf(getJson("/api/v1/pets/me", session.token(), 200)).path("id").asLong())
+                .isEqualTo(first.path("id").asLong());
+    }
+
+    @Test
+    @DisplayName("切换别人的宠物返回 404，和切换不存在的宠物无从区分")
+    void activatingStrangersPetIsNotFound() throws Exception {
+        Session mine = newSession();
+        Session theirs = newSession();
+        JsonNode theirPet = dataOf(createPet(theirs, "DRAGON", "别人的"));
+
+        long strangerId = theirPet.path("id").asLong();
+        assertThat(codeOf(activateRaw(mine, strangerId, 404))).isEqualTo("PET_NOT_FOUND");
+        assertThat(codeOf(activateRaw(mine, 999_999L, 404))).isEqualTo("PET_NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("配置接口返回槽位上限")
+    void configExposesMaxSlots() throws Exception {
+        JsonNode data = dataOf(getJson("/api/v1/game/config", null, 200));
+        assertThat(data.path("maxSlots").asInt()).isEqualTo(GameRules.MAX_PET_SLOTS);
     }
 
     @Test
@@ -708,7 +784,14 @@ class PetApiIntegrationTest {
                 Map.of("action", action, "clientRequestId", clientRequestId), expectedStatus);
     }
 
-    private JsonNode postJson(String path, String authorization, Map<String, String> body, int expectedStatus)
+    /**
+     * POST 一个 JSON 请求体并断言状态码，返回完整响应体。
+     *
+     * <p>体是 {@code Map<String, ?>} 而不是 {@code Map<String, String>}：
+     * {@code /pets/me/active} 的 {@code petId} 是数字，用字符串传虽然 Jackson
+     * 多半也能转，但那样测的就不是真实的请求形状了。</p>
+     */
+    private JsonNode postJson(String path, String authorization, Map<String, ?> body, int expectedStatus)
             throws Exception {
         var request = post(path)
                 .characterEncoding(StandardCharsets.UTF_8.name())
@@ -721,6 +804,26 @@ class PetApiIntegrationTest {
                 .andExpect(status().is(expectedStatus))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return objectMapper.readTree(response);
+    }
+
+    /** 送走一只宠物并断言状态码，返回完整响应体。 */
+    private JsonNode releaseRaw(Session session, Object petId, int expectedStatus) throws Exception {
+        var request = delete("/api/v1/pets/{petId}", petId)
+                .header(HttpHeaders.AUTHORIZATION, bearer(session));
+        String response = mockMvc.perform(request)
+                .andExpect(status().is(expectedStatus))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return objectMapper.readTree(response);
+    }
+
+    /** 送走一只宠物，断言 200。 */
+    private JsonNode release(Session session, Object petId) throws Exception {
+        return releaseRaw(session, petId, 200);
+    }
+
+    /** 切换当前宠物。 */
+    private JsonNode activateRaw(Session session, Object petId, int expectedStatus) throws Exception {
+        return postJson("/api/v1/pets/me/active", bearer(session), Map.of("petId", petId), expectedStatus);
     }
 
     private JsonNode getJson(String path, String token, int expectedStatus) throws Exception {
