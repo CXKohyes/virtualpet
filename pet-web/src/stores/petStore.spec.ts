@@ -2,25 +2,37 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { createPet, fetchJournal, fetchPet, performAction, resetPet } from '@/api/pet'
+import { fetchGameConfig } from '@/api/gameConfig'
+import { activatePet, createPet, fetchJournal, fetchPets, fetchPet, performAction, releasePet } from '@/api/pet'
 import { PET_SCENE_LINES, PET_STATUS_LINES } from '@/content/petLines'
 import { usePetStore } from '@/stores/petStore'
 
-import type { ActionOutcome, JournalEntry, Pet, SettlementSummary } from '@/types/pet'
+import type { ActionOutcome, GameConfig, JournalEntry, Pet, SettlementSummary } from '@/types/pet'
 
 vi.mock('@/api/pet', () => ({
   createPet: vi.fn(),
   fetchPet: vi.fn(),
   fetchJournal: vi.fn(),
   performAction: vi.fn(),
-  resetPet: vi.fn(),
+  fetchPets: vi.fn(),
+  activatePet: vi.fn(),
+  releasePet: vi.fn(),
+}))
+
+// 名册会顺手拉一次配置（要 maxSlots）。不 mock 的话它会去打真实网络请求 ——
+// 被 loadRoster 的 catch 吞掉，测试看着是绿的，但每次都在等一个必然失败的请求。
+vi.mock('@/api/gameConfig', () => ({
+  fetchGameConfig: vi.fn(),
 }))
 
 const fetchPetMock = vi.mocked(fetchPet)
 const fetchJournalMock = vi.mocked(fetchJournal)
 const createPetMock = vi.mocked(createPet)
 const performActionMock = vi.mocked(performAction)
-const resetPetMock = vi.mocked(resetPet)
+const fetchPetsMock = vi.mocked(fetchPets)
+const activatePetMock = vi.mocked(activatePet)
+const releasePetMock = vi.mocked(releasePet)
+const fetchGameConfigMock = vi.mocked(fetchGameConfig)
 
 /** 固定"现在"，让冷却倒计时可预期。 */
 const NOW = new Date('2026-09-17T12:00:00Z')
@@ -28,6 +40,8 @@ const NOW = new Date('2026-09-17T12:00:00Z')
 function makePet(overrides: Partial<Pet> = {}): Pet {
   return {
     id: 1,
+    slot: 0,
+    active: true,
     species: 'CAT',
     name: '咪咪',
     satiety: 80,
@@ -43,6 +57,19 @@ function makePet(overrides: Partial<Pet> = {}): Pet {
     lastSettledAt: NOW.toISOString(),
     cooldowns: {},
     settlement: null,
+    ...overrides,
+  }
+}
+
+function makeConfig(overrides: Partial<GameConfig> = {}): GameConfig {
+  return {
+    offlineCapHours: 12,
+    maxLevel: 10,
+    maxSlots: 3,
+    expThresholds: [40, 90],
+    species: [],
+    actions: [],
+    evolution: [],
     ...overrides,
   }
 }
@@ -94,6 +121,10 @@ describe('petStore', () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     fetchJournalMock.mockResolvedValue([])
+    // 名册和配置给了默认值：不设的话 vi.fn() 返回 undefined，
+    // loadRoster 会把它当成"名册就是这个值"存下来，后面读 .length 就炸了
+    fetchPetsMock.mockResolvedValue([])
+    fetchGameConfigMock.mockResolvedValue(makeConfig())
   })
 
   afterEach(() => {
@@ -574,28 +605,114 @@ describe('petStore', () => {
     })
 
     it('领养失败时返回 false 并带上原因', async () => {
-      createPetMock.mockRejectedValue(new ApiError('PET_ALREADY_EXISTS', '已经领养过宠物了', 409))
+      createPetMock.mockRejectedValue(new ApiError('PET_SLOTS_FULL', '宠物已经满了，先送走一只再领养', 409))
 
       const store = usePetStore()
       const ok = await store.adopt('CAT', '咪咪')
 
       expect(ok).toBe(false)
-      expect(store.error).toBe('已经领养过宠物了')
+      expect(store.error).toBe('宠物已经满了，先送走一只再领养')
     })
 
-    it('重置后清空宠物、日志和摘要', async () => {
+    it('送走最后一只后清空宠物、日志和摘要', async () => {
       fetchPetMock.mockResolvedValue(makePet({ settlement: makeSummary() }))
       fetchJournalMock.mockResolvedValue([makeEntry()])
-      resetPetMock.mockResolvedValue(undefined)
+      releasePetMock.mockResolvedValue(undefined)
+      fetchPetsMock.mockResolvedValue([])
 
       const store = usePetStore()
       await store.load()
-      const ok = await store.reset()
+      const ok = await store.releaseActive()
 
       expect(ok).toBe(true)
       expect(store.pet).toBeNull()
       expect(store.journal).toHaveLength(0)
       expect(store.offlineSummary).toBeNull()
+    })
+  })
+
+  describe('多宠物槽', () => {
+    it('loadRoster 存下名册和槽位上限', async () => {
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0, active: false }),
+        makePet({ id: 2, slot: 1, active: true }),
+      ])
+      fetchGameConfigMock.mockResolvedValue(makeConfig({ maxSlots: 3 }))
+
+      const store = usePetStore()
+      await store.loadRoster()
+
+      expect(store.roster).toHaveLength(2)
+      expect(store.maxSlots).toBe(3)
+      expect(store.slotsFull).toBe(false)
+    })
+
+    it('名册满了时 slotsFull 为真', async () => {
+      fetchPetsMock.mockResolvedValue([
+        makePet({ id: 1, slot: 0 }),
+        makePet({ id: 2, slot: 1 }),
+        makePet({ id: 3, slot: 2 }),
+      ])
+      fetchGameConfigMock.mockResolvedValue(makeConfig({ maxSlots: 3 }))
+
+      const store = usePetStore()
+      await store.loadRoster()
+
+      expect(store.slotsFull).toBe(true)
+    })
+
+    it('配置拿不到时不把入口藏掉（宁可让服务端去拒绝）', async () => {
+      fetchPetsMock.mockResolvedValue([makePet({ id: 1 })])
+      fetchGameConfigMock.mockRejectedValue(new Error('连不上'))
+
+      const store = usePetStore()
+      await store.loadRoster()
+
+      expect(store.maxSlots).toBe(0)
+      expect(store.slotsFull).toBe(false)
+      // 名册本身不该被配置的失败拖没
+      expect(store.roster).toHaveLength(1)
+    })
+
+    it('切换当前宠物，并把服务端带回来的结算摘要接上', async () => {
+      activatePetMock.mockResolvedValue(makePet({ id: 2, slot: 1, name: '旺财', settlement: makeSummary() }))
+      fetchPetsMock.mockResolvedValue([])
+
+      const store = usePetStore()
+      const ok = await store.switchTo(2)
+
+      expect(ok).toBe(true)
+      expect(store.pet?.name).toBe('旺财')
+      expect(store.offlineSummary).not.toBeNull()
+    })
+
+    it('点到当前那只时不发请求', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ id: 7 }))
+
+      const store = usePetStore()
+      await store.load()
+      const ok = await store.switchTo(7)
+
+      expect(ok).toBe(true)
+      expect(activatePetMock).not.toHaveBeenCalled()
+    })
+
+    it('送走当前宠物但还有别的时，跟着服务端换成剩下那只', async () => {
+      fetchPetMock.mockResolvedValue(makePet({ id: 1, slot: 0 }))
+      releasePetMock.mockResolvedValue(undefined)
+      fetchPetsMock.mockResolvedValue([
+        // 服务端已经把当前宠物改到了剩下这只，前端照着 `active` 认人，
+        // 不自己再定一套「该轮到谁」的规则
+        makePet({ id: 2, slot: 1, name: '旺财', active: true }),
+      ])
+
+      const store = usePetStore()
+      await store.load()
+      const ok = await store.release(1)
+
+      expect(ok).toBe(true)
+      expect(store.pet?.id).toBe(2)
+      expect(store.pet?.name).toBe('旺财')
     })
   })
 })

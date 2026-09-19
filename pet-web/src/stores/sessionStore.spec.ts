@@ -93,6 +93,8 @@ describe('sessionStore', () => {
   it('把会话带回的宠物种进 petStore，连同离线摘要', async () => {
     const withPet = {
       id: 1,
+      slot: 0,
+      active: true,
       species: 'CAT' as const,
       name: '咪咪',
       satiety: 40,

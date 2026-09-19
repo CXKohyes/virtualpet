@@ -43,7 +43,35 @@ export function fetchJournal(limit = 20): Promise<JournalEntry[]> {
   })
 }
 
-/** 重置存档：删除宠物和日志，玩家记录保留（docs/api.md 2.6）。 */
-export function resetPet(): Promise<void> {
-  return request<void>({ method: 'DELETE', url: '/pets/me' })
+/**
+ * 名册：该玩家的全部宠物，按槽位升序（docs/api.md 2.13）。
+ *
+ * 服务端会**逐只结算**，所以每只带的 `settlement` 都是真的 ——
+ * 名册能一眼看出谁快不行了，靠的就是这个。
+ */
+export function fetchPets(): Promise<Pet[]> {
+  return request<Pet[]>({ method: 'GET', url: '/pets' })
+}
+
+/**
+ * 切换当前宠物（docs/api.md 2.14）。
+ *
+ * 返回切换后那只已结算的状态，于是「切过去」这个动作本身就带回了
+ * 「你不在时它怎么样了」。
+ */
+export function activatePet(petId: number): Promise<Pet> {
+  return request<Pet>({
+    method: 'POST',
+    url: '/pets/me/active',
+    data: { petId },
+  })
+}
+
+/**
+ * 送走一只宠物：删除它和它的全部照护日志（docs/api.md 2.6）。
+ *
+ * 不是幂等的：重复送走同一只返回 404，调用方据此知道名册已经旧了。
+ */
+export function releasePet(petId: number): Promise<void> {
+  return request<void>({ method: 'DELETE', url: `/pets/${petId}` })
 }

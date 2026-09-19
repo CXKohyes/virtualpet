@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { ApiError, serverNow } from '@/api/client'
-import { createPet, fetchJournal, fetchPet, performAction, resetPet } from '@/api/pet'
+import { fetchGameConfig } from '@/api/gameConfig'
+import { activatePet, createPet, fetchJournal, fetchPets, fetchPet, performAction, releasePet } from '@/api/pet'
 import { soundForAction, useAudio } from '@/composables/useAudio'
 import { createSpeechDirector } from '@/content/petLines'
 
@@ -35,7 +36,17 @@ const ACTION_SCENES: Record<PetAction, SpeechScene> = {
  *    不猜属性数值 —— 猜数值就等于把规则抄了一遍。
  */
 export const usePetStore = defineStore('pet', () => {
+  /**
+   * 当前宠物。四个操作、照护日志、对战都作用在它身上。
+   *
+   * 多宠物槽之后这个字段的含义没变，只是不再是「唯一那只」了 ——
+   * 全部宠物在 {@link roster} 里，切换用 {@link switchTo}。
+   */
   const pet = ref<Pet | null>(null)
+  /** 名册：全部宠物，按槽位升序。每只都带着服务端结算过的状态（PRD 2.1）。 */
+  const roster = ref<Pet[]>([])
+  /** 槽位上限，来自配置接口。拿不到时是 0，界面就不显示「再养一只」。 */
+  const maxSlots = ref(0)
   const loading = ref(false)
   /** 正在执行的操作，按钮据此进入按压态。 */
   const acting = ref<PetAction | null>(null)
@@ -116,8 +127,18 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
+  /**
+   * 槽位是否已经满了。
+   *
+   * 配置没拿到时（`maxSlots === 0`）一律当作「没满」：宁可让玩家点进领养页
+   * 被服务端拒绝并看到明确原因，也不要因为一次配置请求失败就把入口藏掉。
+   */
+  const slotsFull = computed(() => maxSlots.value > 0 && roster.value.length >= maxSlots.value)
+
   /** 是否已经向后端确认过有没有宠物。 */
   const loadedOnce = ref(false)
+  /** 名册是否已经拉过一次。和 loadedOnce 分开：会话响应只带当前宠物，不带名册。 */
+  const rosterLoaded = ref(false)
 
   /**
    * 用会话接口带回来的宠物初始化。
@@ -216,10 +237,115 @@ export const usePetStore = defineStore('pet', () => {
    * 路由守卫每次导航都会调用它，用它避免反复打接口。
    */
   async function ensureLoaded(): Promise<void> {
-    if (loadedOnce.value) {
-      return
+    if (!loadedOnce.value) {
+      await load()
     }
-    await load()
+    if (!rosterLoaded.value) {
+      await loadRoster()
+    }
+  }
+
+  // ---------------------------------------------------------------- 多宠物槽
+
+  /**
+   * 拉名册和槽位上限。
+   *
+   * 名册是次要信息：拉不到就保持现状，不影响宠物状态本身。
+   * 配置单独 catch —— 它只是「再养一只」那个入口的开关，
+   * 拿不到顶多不显示入口，不该把名册一起拖没。
+   */
+  async function loadRoster(): Promise<void> {
+    try {
+      const [list, config] = await Promise.all([
+        fetchPets(),
+        fetchGameConfig().catch(() => null),
+      ])
+      roster.value = list
+      if (config !== null) {
+        maxSlots.value = config.maxSlots
+      }
+      rosterLoaded.value = true
+    } catch {
+      // 名册失败不影响主流程，和 loadJournal 一个策略
+    }
+  }
+
+  /**
+   * 切换当前宠物（PRD 2.1）。
+   *
+   * 点到的是同一只就什么都不做 —— 否则每次点名册都白跑一次结算。
+   */
+  async function switchTo(petId: number): Promise<boolean> {
+    if (pet.value?.id === petId) {
+      return true
+    }
+    loading.value = true
+    error.value = null
+    try {
+      enterPet(await activatePet(petId))
+      await loadJournal()
+      await loadRoster()
+      return true
+    } catch (cause) {
+      error.value = describe(cause)
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * 送走一只宠物（PRD 2.1）。
+   *
+   * 送走的如果是当前宠物，服务端已经在同一个事务里把当前宠物改到了剩下那只
+   * （一只都不剩就置空）。这里**跟着服务端的结论走**：重新拉一次名册，
+   * 用返回的 `active` 标记挑下一只，而不是自己再定一套「该轮到谁」的规则。
+   */
+  async function release(petId: number): Promise<boolean> {
+    loading.value = true
+    error.value = null
+    try {
+      await releasePet(petId)
+      await loadRoster()
+
+      if (pet.value?.id === petId) {
+        const next = roster.value.find((item) => item.active) ?? roster.value[0]
+        if (next) {
+          enterPet(next)
+          await loadJournal()
+        } else {
+          clearPetState()
+          loadedOnce.value = true
+        }
+      }
+      return true
+    } catch (cause) {
+      error.value = describe(cause)
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 送走当前宠物。设置页的「送走这只」用它；名册里逐只送走用 {@link release}。 */
+  async function releaseActive(): Promise<boolean> {
+    return pet.value === null ? false : release(pet.value.id)
+  }
+
+  /**
+   * 把一只宠物变成「当前宠物」。
+   *
+   * 切换和送走之后都走这里。换了一只要重新开始记「上一条台词」，
+   * 并且把服务端在响应里带回来的结算摘要接上 —— 回访台词不该因为
+   * 换了个入口就丢掉。
+   */
+  function enterPet(next: Pet): void {
+    pet.value = next
+    offlineSummary.value = next.settlement
+    journal.value = []
+    loadedOnce.value = true
+    director.reset()
+    greet(next)
   }
 
   /** 领养。成功返回 true。 */
@@ -235,6 +361,8 @@ export const usePetStore = defineStore('pet', () => {
       // 换了一只宠物，重新开始记"上一条台词"
       director.reset()
       speak(`我是${name}，请多关照！`)
+      // 新领养的占了一个槽位，名册和「还能不能再养」都要跟着变
+      await loadRoster()
       return true
     } catch (cause) {
       error.value = describe(cause)
@@ -294,25 +422,9 @@ export const usePetStore = defineStore('pet', () => {
     ].slice(0, JOURNAL_LIMIT)
   }
 
-  /** 重置存档，回到领养页。成功返回 true。 */
-  async function reset(): Promise<boolean> {
-    loading.value = true
-    error.value = null
-    try {
-      await resetPet()
-      clearPetState()
-      loadedOnce.value = true
-      return true
-    } catch (cause) {
-      error.value = describe(cause)
-      return false
-    } finally {
-      loading.value = false
-    }
-  }
-
   function clearPetState(): void {
     pet.value = null
+    roster.value = []
     journal.value = []
     offlineSummary.value = null
     speech.value = ''
@@ -330,6 +442,9 @@ export const usePetStore = defineStore('pet', () => {
 
   return {
     pet,
+    roster,
+    maxSlots,
+    slotsFull,
     loading,
     acting,
     error,
@@ -351,7 +466,10 @@ export const usePetStore = defineStore('pet', () => {
     speakIdle,
     adopt,
     act,
-    reset,
+    loadRoster,
+    switchTo,
+    release,
+    releaseActive,
     dismissOfflineSummary,
     consumeFlash,
   }

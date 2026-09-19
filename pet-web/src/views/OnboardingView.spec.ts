@@ -25,6 +25,7 @@ const createPetMock = vi.mocked(createPet)
 const GAME_CONFIG: GameConfig = {
   offlineCapHours: 12,
   maxLevel: 10,
+  maxSlots: 3,
   expThresholds: [40, 90, 150, 220, 300, 390, 490, 600, 720],
   species: [
     {
@@ -67,6 +68,8 @@ const GAME_CONFIG: GameConfig = {
 
 const CREATED_PET: Pet = {
   id: 1,
+  slot: 0,
+  active: true,
   species: 'CAT',
   name: '咪咪',
   satiety: 80,

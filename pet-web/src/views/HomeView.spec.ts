@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { fetchGameConfig } from '@/api/gameConfig'
-import { fetchJournal, fetchPet, performAction } from '@/api/pet'
+import { fetchJournal, fetchPets, fetchPet, performAction } from '@/api/pet'
 import { FLASH_DURATION_MS } from '@/content/messages'
 import { spriteFor } from '@/content/petSprites'
 import HomeView from '@/views/HomeView.vue'
@@ -18,12 +18,15 @@ vi.mock('@/api/pet', () => ({
   fetchPet: vi.fn(),
   fetchJournal: vi.fn(),
   performAction: vi.fn(),
-  resetPet: vi.fn(),
+  fetchPets: vi.fn(),
+  activatePet: vi.fn(),
+  releasePet: vi.fn(),
 }))
 
 const fetchPetMock = vi.mocked(fetchPet)
 const fetchJournalMock = vi.mocked(fetchJournal)
 const performActionMock = vi.mocked(performAction)
+const fetchPetsMock = vi.mocked(fetchPets)
 const fetchGameConfigMock = vi.mocked(fetchGameConfig)
 
 const NOW = new Date('2026-09-17T12:00:00Z')
@@ -31,6 +34,8 @@ const NOW = new Date('2026-09-17T12:00:00Z')
 function makePet(overrides: Partial<Pet> = {}): Pet {
   return {
     id: 1,
+    slot: 0,
+    active: true,
     species: 'CAT',
     name: '咪咪',
     satiety: 80,
@@ -93,6 +98,7 @@ function makeSummary(overrides: Partial<SettlementSummary> = {}): SettlementSumm
 const GAME_CONFIG: GameConfig = {
   offlineCapHours: 12,
   maxLevel: 10,
+  maxSlots: 3,
   expThresholds: [40],
   species: [],
   actions: [
@@ -171,6 +177,8 @@ describe('HomeView', () => {
     vi.setSystemTime(NOW)
     fetchGameConfigMock.mockResolvedValue(GAME_CONFIG)
     fetchJournalMock.mockResolvedValue([])
+    // 名册默认是空的；vi.fn() 返回 undefined 会被 loadRoster 存下来，读 .length 就炸
+    fetchPetsMock.mockResolvedValue([])
   })
 
   afterEach(() => {

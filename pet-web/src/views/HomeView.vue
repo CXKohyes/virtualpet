@@ -132,10 +132,15 @@ async function onAction(action: PetAction): Promise<void> {
 
 async function onReset(): Promise<void> {
   resetting.value = true
-  const done = await petStore.reset()
+  const done = await petStore.releaseActive()
   resetting.value = false
-  if (done) {
-    uiStore.closeSettings()
+  if (!done) {
+    return
+  }
+  uiStore.closeSettings()
+  // 还有别的宠物就留在主界面 —— 服务端已经把当前宠物换成了剩下那只；
+  // 一只都不剩才回领养页。
+  if (petStore.pet === null) {
     await router.push({ name: 'onboarding' })
   }
 }

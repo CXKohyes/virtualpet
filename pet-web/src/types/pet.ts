@@ -61,6 +61,10 @@ export interface JournalEntry {
 /** 宠物完整状态。服务端返回的是唯一事实，前端不自行推算。 */
 export interface Pet extends PetAttributes {
   id: number
+  /** 槽位号，同一玩家的宠物按它升序排列（PRD 2.1，多宠物槽）。 */
+  slot: number
+  /** 是不是当前宠物。`/pets/me` 返回的那只恒为 true，名册里只有一只是。 */
+  active: boolean
   species: Species
   name: string
   status: PetStatus
@@ -100,6 +104,8 @@ export interface SessionData {
 export interface GameConfig {
   offlineCapHours: number
   maxLevel: number
+  /** 最多能养几只（PRD 2.1）。界面据此决定要不要显示「再养一只」。 */
+  maxSlots: number
   expThresholds: number[]
   species: GameConfigSpecies[]
   actions: GameConfigAction[]

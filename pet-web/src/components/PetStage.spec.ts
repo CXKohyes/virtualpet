@@ -12,6 +12,8 @@ const NOW = new Date('2026-09-18T04:00:00Z')
 function makePet(overrides: Partial<Pet> = {}): Pet {
   return {
     id: 1,
+    slot: 0,
+    active: true,
     species: 'CAT',
     name: '咪咪',
     satiety: 80,
