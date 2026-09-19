@@ -43,9 +43,10 @@ failsafe-reports/
 edgeone部署.txt
 *部署.txt
 
-# 放在仓库根目录的参考截图（选服务器时截的图之类）。
+# 放在仓库根目录的参考截图（选服务器时截的图、找美术参考时存的图之类）。
 # 只挡根目录：精灵图在 pet-web/src/assets/pets/ 下，不受影响。
 /*.png
+/*.webp
 
 # 本地数据库连接配置（示例文件必须保留：application-local.yml.example）
 application-local.yml

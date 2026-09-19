@@ -282,9 +282,11 @@ class BattleSimulatorTest {
         }
 
         @Test
-        @DisplayName("三个物种在同一个等级下互有胜负，没有碾压一切的那个")
+        @DisplayName("所有物种在同一个等级下互有胜负，没有碾压一切的那个")
         void everySpeciesWinsSomeMatchups() {
-            List<Species> all = List.of(Species.CAT, Species.DOG, Species.DRAGON);
+            // 从枚举派生而不是写字面量：写字面量的话，新加物种时这条测试会**照常通过**，
+            // 只是悄悄把新物种漏掉 —— 那比失败更糟。
+            List<Species> all = List.of(Species.values());
 
             for (Species attacker : all) {
                 for (Species defender : all) {
@@ -306,11 +308,18 @@ class BattleSimulatorTest {
          * 上面那几轮"改一个常数、跑两百场"才是唯一靠谱的办法。</p>
          */
         @Test
-        @DisplayName("中期三个物种两两之间都在 40–60%，没有明显强弱")
+        @DisplayName("中期所有物种两两之间都在 40–60%，没有明显强弱")
         void midGameIsBalanced() {
-            assertThat(winRate(Species.CAT, Species.DOG, 5, 1)).isBetween(40, 60);
-            assertThat(winRate(Species.CAT, Species.DRAGON, 5, 1)).isBetween(40, 60);
-            assertThat(winRate(Species.DOG, Species.DRAGON, 5, 1)).isBetween(40, 60);
+            // 同样是枚举派生：物种从 3 个加到 4 个，配对从 3 对变成 6 对，
+            // 硬编码的三行不会失败，只会漏掉新增的 3 对。
+            Species[] all = Species.values();
+            for (int i = 0; i < all.length; i++) {
+                for (int j = i + 1; j < all.length; j++) {
+                    assertThat(winRate(all[i], all[j], 5, 1))
+                            .as("中期 %s 打 %s", all[i], all[j])
+                            .isBetween(40, 60);
+                }
+            }
         }
 
         @Test

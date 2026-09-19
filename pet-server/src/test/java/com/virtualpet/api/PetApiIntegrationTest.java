@@ -3,6 +3,7 @@ package com.virtualpet.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.virtualpet.game.GameRules;
+import com.virtualpet.game.Species;
 import com.virtualpet.pet.Pet;
 import com.virtualpet.pet.PetMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -600,7 +601,9 @@ class PetApiIntegrationTest {
         assertThat(data.path("maxLevel").asInt()).isEqualTo(10);
         assertThat(data.path("expThresholds")).hasSize(9);
         assertThat(data.path("expThresholds").get(0).asInt()).isEqualTo(40);
-        assertThat(data.path("species")).hasSize(3);
+        // 从枚举派生：这条断言的意思是「配置接口把枚举里的物种全返回了」，
+        // 写成 3 的话，加了物种它会照常通过，而接口漏掉新物种也发现不了。
+        assertThat(data.path("species")).hasSize(Species.values().length);
         assertThat(data.path("actions")).hasSize(5);
         assertThat(data.path("evolution")).hasSize(3);
     }
