@@ -1,0 +1,57 @@
+# 拆掉「一名玩家一只宠物」这条唯一键（uk_pets_player_id），多宠物槽才成立。
+#
+# 为什么是三步（摘外键 → 删唯一键 → 加回外键）而不是一句 DROP：
+#
+#   uk_pets_player_id 不只是个唯一键，它同时是外键 fk_pets_player 在 player_id 上
+#   的支撑索引。两个引擎都会因此挡住直接删除，但**挡住的方式完全不同**：
+#
+#     MySQL：直接报 ERROR 1553 "Cannot drop index ... needed in a foreign key
+#            constraint"，而且是硬失败，一眼能看出来。
+#
+#     H2：  最阴的一种。DROP CONSTRAINT 会「成功」，约束从 information_schema
+#            里真的消失，但它留下的支撑索引被**转交给了外键**，而那个索引仍然是
+#            UNIQUE 的 —— 唯一性照样在强制。查元数据会以为改完了，实际插入行为
+#            一点没变。开发这个批次时就是这么踩进去的：元数据断言全绿，行为断言全红。
+#            试过先建一个普通索引给外键当替代品，H2 仍然把外键钉在旧索引上
+#            （它不会重新挑选），所以那条路走不通。
+#
+#   把外键先摘掉，旧索引就没有任何依赖者了，约束和索引会一起干净地消失；
+#   再把外键加回来时，它会挂到 003 里建好的 idx_pets_player 上。
+#
+# 为什么用 YAML 而不是 formatted SQL：
+#   摘外键的语法同样各方言不同（MySQL 是 DROP FOREIGN KEY，H2 是 DROP CONSTRAINT，
+#   ALTER TABLE ... DROP CONSTRAINT 要到 MySQL 8.0.19 才有，而本机开发库是 5.7.44）。
+#   dropForeignKeyConstraint / addForeignKeyConstraint / dropUniqueConstraint
+#   这几个 change type 会按方言生成，所以这一段整体走 YAML。
+#
+# 加回外键时**不写 onDelete**，保持和 001 里建表时一致（默认 RESTRICT）。
+databaseChangeLog:
+  - changeSet:
+      id: 030-drop-pets-player-fk
+      author: virtual-pet
+      comment: 先摘外键，让旧唯一索引失去依赖者
+      changes:
+        - dropForeignKeyConstraint:
+            baseTableName: pets
+            constraintName: fk_pets_player
+
+  - changeSet:
+      id: 031-drop-legacy-pets-unique
+      author: virtual-pet
+      comment: 现在可以干净地删掉「一名玩家一只宠物」这条唯一键
+      changes:
+        - dropUniqueConstraint:
+            tableName: pets
+            constraintName: uk_pets_player_id
+
+  - changeSet:
+      id: 032-recreate-pets-player-fk
+      author: virtual-pet
+      comment: 外键加回来，这次挂在 003 建的 idx_pets_player 上
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: pets
+            baseColumnNames: player_id
+            referencedTableName: players
+            referencedColumnNames: id
+            constraintName: fk_pets_player

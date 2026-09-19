@@ -24,6 +24,18 @@ public class Pet {
 
     private Long playerId;
 
+    /**
+     * 槽位号，与 {@code playerId} 一起构成唯一键（PRD 2.1，多宠物槽）。
+     *
+     * <p>取值 {@code 0 .. maxSlots-1}。领养时挑的是**最小的空闲槽**，而不是
+     * 「当前数量 + 1」—— 送走中间某只之后，那个槽必须能被重新用上，
+     * 否则三个槽位用满再送走一只就再也领养不了了。</p>
+     *
+     * <p>非活跃宠物照样走懒结算衰减，没有「暂停」机制；切换过去时按
+     * 既有的 12 小时封顶补算。</p>
+     */
+    private Integer slot;
+
     private String species;
 
     private String name;
@@ -90,6 +102,14 @@ public class Pet {
 
     public void setPlayerId(Long playerId) {
         this.playerId = playerId;
+    }
+
+    public Integer getSlot() {
+        return slot;
+    }
+
+    public void setSlot(Integer slot) {
+        this.slot = slot;
     }
 
     public String getSpecies() {

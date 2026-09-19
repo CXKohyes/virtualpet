@@ -222,6 +222,7 @@ EvolutionStage: 0 | 1 | 2
 | device_id | VARCHAR(64) | UNIQUE, NOT NULL | 浏览器生成的随机设备 ID |
 | token_hash | VARCHAR(128) | NOT NULL | 访问令牌的 SHA-256 哈希 |
 | friend_code | VARCHAR(12) | UNIQUE, NULL | P1 好友码 |
+| active_pet_id | BIGINT | NULL | 当前宠物；无宠物时为 NULL。**刻意不加外键**：送走宠物要物理删 `pets` 行，加了外键会让删除失败 |
 | created_at | TIMESTAMP | NOT NULL | UTC 创建时间 |
 | last_seen_at | TIMESTAMP | NOT NULL | UTC 最近访问时间 |
 
@@ -230,7 +231,8 @@ EvolutionStage: 0 | 1 | 2
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | id | BIGINT | PK, AUTO_INCREMENT | 宠物 ID |
-| player_id | BIGINT | UNIQUE, NOT NULL, FK | 一名玩家一只宠物 |
+| player_id | BIGINT | NOT NULL, FK | 与 `slot` 一起构成唯一键 |
+| slot | INT | NOT NULL, DEFAULT 0 | 槽位号 0–2。领养时取**最小空闲槽**，不是「数量 + 1」 |
 | species | VARCHAR(16) | NOT NULL | CAT/DOG/DRAGON |
 | name | VARCHAR(32) | NOT NULL | 1–8 个字符 |
 | satiety | INT | NOT NULL, 0–100 | 饱食 |
@@ -251,7 +253,7 @@ EvolutionStage: 0 | 1 | 2
 
 索引：
 
-- `UNIQUE(player_id)`
+- `UNIQUE(player_id, slot)` —— P2 多宠物槽时**取代**了原来的 `UNIQUE(player_id)`
 - `INDEX(last_settled_at)`
 - `INDEX(status)`
 
@@ -830,7 +832,13 @@ app:
 
 ## 13. 已冻结的技术决策
 
-- 单宠物槽，不做多宠物。
+- **多宠物槽最多 3 只**（原先冻结为「单宠物槽，不做多宠物」，于 P2 第一批解冻）。
+  同一时间只有一只「当前宠物」，由 `players.active_pet_id` 记录；`/pets/me` 的语义
+  就是这一只，所以四个操作、照护日志、对战这些既有接口都不改签名。
+  非活跃宠物**照常走懒结算衰减**，没有暂停机制；切换过去时按既有的 12 小时封顶补算。
+  *解冻理由*：原先冻结是因为 MVP 只需要一只；后来它成了 `PRD.md` P2 的第一项，
+  而改动只需换掉一条唯一键——存量数据里 `player_id` 本来就唯一，全部落进 0 号槽，
+  新约束天然成立。
 - 懒结算，不做每分钟定时衰减。
 - REST 为 MVP 主链路。
 - WebSocket 仅预埋。

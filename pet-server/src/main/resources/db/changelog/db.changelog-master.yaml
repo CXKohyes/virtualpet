@@ -3,3 +3,10 @@ databaseChangeLog:
       file: db/changelog/001-init.sql
   - include:
       file: db/changelog/002-battles.sql
+  - include:
+      file: db/changelog/003-multi-pet.sql
+  # 拆掉旧的「一名玩家一只宠物」唯一键。摘外键/删唯一键/加回外键三句的语法
+  # 各方言都不同，必须整体走 change type，详见文件头的说明。
+  # 不是 includeAll —— 顺序必须显式写死。
+  - include:
+      file: db/changelog/004-multi-pet-constraints.yaml
